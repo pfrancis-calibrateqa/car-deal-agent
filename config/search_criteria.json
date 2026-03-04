@@ -1,0 +1,49 @@
+{
+  "searches": [
+    {
+      "make": "Honda",
+      "model": "CR-V",
+      "years": [2012, 2013, 2014, 2016, 2020, 2021, 2022, 2023],
+      "drivetrain": "AWD"
+    },
+    {
+      "make": "Mazda",
+      "model": "CX-5",
+      "years": [2013, 2015, 2019, 2020, 2021, 2022, 2023],
+      "drivetrain": "AWD"
+    }
+  ],
+  "filters": {
+    "max_mileage": 70000,
+    "condition": "used",
+    "title": "clean",
+    "seller_type": "private",
+    "exclude_colors": ["black"],
+    "exclude_keywords": [
+      "dealer", "lot", "certified pre-owned", "cpo", "salvage",
+      "rebuilt", "flood", "lemon", "transmission issue", "engine issue",
+      "needs work", "as-is", "as is", "mechanic special"
+    ]
+  },
+  "regions": [
+    {
+      "name": "San Francisco Bay Area",
+      "center_zip": "94102",
+      "center_lat": 37.7749,
+      "center_lng": -122.4194,
+      "radius_miles": 100
+    },
+    {
+      "name": "Medford, OR",
+      "center_zip": "97501",
+      "center_lat": 42.3265,
+      "center_lng": -122.8756,
+      "radius_miles": 60
+    }
+  ],
+  "ranking": {
+    "method": "value_score",
+    "description": "Score = (1 - mileage/70000) * 0.4 + recency_bonus * 0.2 + year_score * 0.4",
+    "higher_is_better": true
+  }
+}
