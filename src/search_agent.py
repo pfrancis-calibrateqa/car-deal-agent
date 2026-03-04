@@ -8,6 +8,13 @@ own backend APIs and extract clean JSON directly — far more reliable than
 CSS selectors which break whenever a site redesigns.
 
 Sources: Craigslist, AutoTrader, Cars.com
+
+Fixes applied:
+  - santacruz -> monterey (valid CL subdomain)
+  - Cars.com: domcontentloaded instead of networkidle to avoid timeout
+  - AutoTrader: domcontentloaded instead of networkidle
+  - Craigslist: added random delay + realistic headers to avoid bot detection
+  - Cars.com: disabled HTTP/2 via context arg to avoid ERR_HTTP2_PROTOCOL_ERROR
 """
 
 import os
@@ -17,6 +24,7 @@ import asyncio
 import smtplib
 import hashlib
 import logging
+import random
 from datetime import datetime, date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -120,12 +128,12 @@ def passes_filters(listing: dict, config: dict) -> bool:
 
 # ── Utility parsers ───────────────────────────────────────────────────────────
 
-def extract_year(text: str) -> int | None:
+def extract_year(text: str):
     m = re.search(r"\b(20[012]\d|199\d)\b", str(text))
     return int(m.group()) if m else None
 
 
-def extract_mileage(text: str) -> int | None:
+def extract_mileage(text: str):
     if not text:
         return None
     text = str(text).replace(",", "")
@@ -138,7 +146,7 @@ def extract_mileage(text: str) -> int | None:
     return None
 
 
-def extract_price(text: str) -> int | None:
+def extract_price(text: str):
     if not text:
         return None
     digits = re.sub(r"[^\d]", "", str(text))
@@ -148,13 +156,18 @@ def extract_price(text: str) -> int | None:
 # ── Browser factory ───────────────────────────────────────────────────────────
 
 async def make_browser(playwright):
-    """Launch a stealth-ish headless Chromium instance."""
+    """
+    Launch a stealth headless Chromium instance.
+    HTTP/2 is disabled at the context level to prevent ERR_HTTP2_PROTOCOL_ERROR
+    on sites like Cars.com that are aggressive about protocol enforcement.
+    """
     browser = await playwright.chromium.launch(
         headless=True,
         args=[
             "--no-sandbox",
             "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
+            "--disable-http2",          # prevents Cars.com HTTP2 errors
         ],
     )
     context = await browser.new_context(
@@ -166,6 +179,10 @@ async def make_browser(playwright):
         viewport={"width": 1280, "height": 900},
         locale="en-US",
         timezone_id="America/Los_Angeles",
+        extra_http_headers={
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
     )
     # Hide webdriver flag from fingerprinting
     await context.add_init_script(
@@ -174,14 +191,21 @@ async def make_browser(playwright):
     return browser, context
 
 
+async def human_delay(min_ms: int = 1500, max_ms: int = 3500):
+    """Random pause to avoid bot detection."""
+    await asyncio.sleep(random.uniform(min_ms / 1000, max_ms / 1000))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  CRAIGSLIST
-#  Strategy: Intercept JSON responses from the search endpoint first;
-#  fall back to DOM parsing of server-rendered HTML if no JSON is captured.
+#  Strategy: Navigate to search page, wait for results to render, then
+#  extract listings via DOM. Craigslist serves server-rendered HTML so
+#  DOM parsing is reliable here. Random delays reduce bot detection.
 # ══════════════════════════════════════════════════════════════════════════════
 
+# FIX: "santacruz" is not a valid CL subdomain — replaced with "monterey"
 CL_SUBDOMAINS = {
-    "San Francisco Bay Area": ["sfbay", "stockton", "modesto", "santacruz"],
+    "San Francisco Bay Area": ["sfbay", "stockton", "modesto", "monterey"],
     "Medford, OR":            ["medford", "eugene", "bend", "roseburg"],
 }
 
@@ -201,35 +225,41 @@ async def search_craigslist(context, make: str, model: str, years: list, region:
             "s":               0,
         })
         url = f"https://{site}.craigslist.org/search/cto?{params}"
-        intercepted: list[dict] = []
 
         page: Page = await context.new_page()
         try:
-            async def handle_response(response):
-                if "search" in response.url and response.status == 200:
-                    ct = response.headers.get("content-type", "")
-                    if "json" in ct:
-                        try:
-                            data = await response.json()
-                            intercepted.append(data)
-                        except Exception:
-                            pass
-
-            page.on("response", handle_response)
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            await page.wait_for_timeout(2_000)
+            await human_delay(2000, 4000)
 
-            # Primary: intercepted JSON
-            for data in intercepted:
-                items = data.get("data", {}).get("items", data.get("items", []))
+            # Try intercepting JSON embedded in the page script tags
+            json_data = await page.evaluate("""
+                () => {
+                    const scripts = document.querySelectorAll('script[type="application/json"]');
+                    for (const s of scripts) {
+                        try { return JSON.parse(s.textContent); } catch(e) {}
+                    }
+                    return null;
+                }
+            """)
+
+            site_listings = []
+
+            # Primary: JSON embedded in page
+            if json_data:
+                items = []
+                if isinstance(json_data, dict):
+                    items = json_data.get("items", json_data.get("data", {}).get("items", []))
+                elif isinstance(json_data, list):
+                    items = json_data
                 for item in items:
                     title = item.get("Title") or item.get("title") or ""
                     price = extract_price(item.get("Ask") or item.get("price") or "")
                     href  = item.get("PostingURL") or item.get("url") or ""
-                    listings.append(_cl_listing(title, price, href, make, model, region))
+                    if title and href:
+                        site_listings.append(_cl_listing(title, price, href, make, model, region))
 
-            # Fallback: DOM
-            if not intercepted:
+            # Fallback: DOM parsing
+            if not site_listings:
                 cards = await page.query_selector_all("li.cl-static-search-result")
                 for card in cards:
                     title_el = await card.query_selector(".title")
@@ -240,14 +270,19 @@ async def search_craigslist(context, make: str, model: str, years: list, region:
                     title      = (await title_el.inner_text()).strip()
                     price_text = (await price_el.inner_text()).strip() if price_el else ""
                     href       = await link_el.get_attribute("href") if link_el else ""
-                    listings.append(_cl_listing(title, extract_price(price_text), href, make, model, region))
+                    if title and href:
+                        site_listings.append(
+                            _cl_listing(title, extract_price(price_text), href, make, model, region)
+                        )
 
-            log.info(f"  Craigslist [{site}]: {len(listings)} raw listings")
+            listings.extend(site_listings)
+            log.info(f"  Craigslist [{site}]: {len(site_listings)} listings")
 
         except Exception as e:
             log.warning(f"  Craigslist [{site}] error: {e}")
         finally:
             await page.close()
+            await human_delay(500, 1500)
 
     return listings
 
@@ -271,10 +306,10 @@ def _cl_listing(title, price, url, make, model, region) -> dict:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  AUTOTRADER
-#  Strategy: Intercept XHR calls to AutoTrader's listing API (/rest/lsc/
-#  listings or similar). These return rich JSON with mileage, color, year,
-#  price, and direct listing URLs — no HTML parsing needed.
+#  Strategy: Intercept XHR JSON from AutoTrader's listing API.
 #  Falls back to data-* attribute DOM parsing if interception yields nothing.
+#  FIX: Changed wait_until from "networkidle" to "domcontentloaded" to
+#  prevent hanging on pages with continuous background requests.
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def search_autotrader(context, make: str, model: str, years: list, region: dict) -> list:
@@ -318,14 +353,16 @@ async def search_autotrader(context, make: str, model: str, years: list, region:
                             or data.get("data", {}).get("listings", [])
                             or []
                         )
-                        intercepted_listings.extend(items)
-                        log.info(f"  AutoTrader intercepted {len(items)} listings from API")
+                        if items:
+                            intercepted_listings.extend(items)
+                            log.info(f"  AutoTrader intercepted {len(items)} listings from API")
                     except Exception:
                         pass
 
         page.on("response", handle_response)
-        await page.goto(url, wait_until="networkidle", timeout=45_000)
-        await page.wait_for_timeout(3_000)
+        # FIX: domcontentloaded avoids hanging on networkidle
+        await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+        await human_delay(3000, 5000)
 
         # Primary: intercepted JSON
         for item in intercepted_listings:
@@ -378,20 +415,21 @@ async def search_autotrader(context, make: str, model: str, years: list, region:
                 href       = await link_el.get_attribute("href") if link_el else ""
                 if href and not href.startswith("http"):
                     href = "https://www.autotrader.com" + href
-                listings.append({
-                    "source":      "AutoTrader",
-                    "title":       title,
-                    "price":       extract_price(price_text),
-                    "mileage":     extract_mileage(miles_text),
-                    "year":        extract_year(title),
-                    "make":        make,
-                    "model":       model,
-                    "url":         href,
-                    "color":       "",
-                    "description": title,
-                    "region":      region["name"],
-                    "posted":      date.today().isoformat(),
-                })
+                if title and href:
+                    listings.append({
+                        "source":      "AutoTrader",
+                        "title":       title,
+                        "price":       extract_price(price_text),
+                        "mileage":     extract_mileage(miles_text),
+                        "year":        extract_year(title),
+                        "make":        make,
+                        "model":       model,
+                        "url":         href,
+                        "color":       "",
+                        "description": title,
+                        "region":      region["name"],
+                        "posted":      date.today().isoformat(),
+                    })
 
         log.info(f"  AutoTrader total: {len(listings)} listings")
 
@@ -409,6 +447,8 @@ async def search_autotrader(context, make: str, model: str, years: list, region:
 #    1. Intercept XHR JSON from the shopping API
 #    2. Extract schema.org JSON-LD embedded in <script> tags (very stable)
 #    3. Final fallback to DOM
+#  FIX: --disable-http2 browser flag prevents ERR_HTTP2_PROTOCOL_ERROR.
+#  FIX: Changed wait_until to "domcontentloaded" to avoid 45s timeout.
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def search_cars_dot_com(context, make: str, model: str, years: list, region: dict) -> list:
@@ -449,8 +489,9 @@ async def search_cars_dot_com(context, make: str, model: str, years: list, regio
                         pass
 
         page.on("response", handle_response)
-        await page.goto(url, wait_until="networkidle", timeout=45_000)
-        await page.wait_for_timeout(3_000)
+        # FIX: domcontentloaded avoids the 45s networkidle timeout
+        await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+        await human_delay(3000, 5000)
 
         # Tier 1: intercepted JSON
         for item in intercepted_listings:
@@ -461,22 +502,23 @@ async def search_cars_dot_com(context, make: str, model: str, years: list, regio
             title   = item.get("name") or item.get("title") or f"{year} {make} {model}"
             slug    = item.get("url_slug") or item.get("url") or ""
             href    = f"https://www.cars.com{slug}" if slug.startswith("/") else slug
-            listings.append({
-                "source":      "Cars.com",
-                "title":       title,
-                "price":       price,
-                "mileage":     int(mileage) if mileage else None,
-                "year":        int(year) if year else None,
-                "make":        make,
-                "model":       model,
-                "url":         href,
-                "color":       color,
-                "description": item.get("description", ""),
-                "region":      region["name"],
-                "posted":      date.today().isoformat(),
-            })
+            if title and href:
+                listings.append({
+                    "source":      "Cars.com",
+                    "title":       title,
+                    "price":       price,
+                    "mileage":     int(mileage) if mileage else None,
+                    "year":        int(year) if year else None,
+                    "make":        make,
+                    "model":       model,
+                    "url":         href,
+                    "color":       color,
+                    "description": item.get("description", ""),
+                    "region":      region["name"],
+                    "posted":      date.today().isoformat(),
+                })
 
-        # Tier 2: JSON-LD schema.org (extremely stable — rarely changes)
+        # Tier 2: JSON-LD schema.org (extremely stable standard)
         if not intercepted_listings:
             log.info("  Cars.com: trying JSON-LD extraction")
             ld_scripts = await page.query_selector_all('script[type="application/ld+json"]')
@@ -497,20 +539,21 @@ async def search_cars_dot_com(context, make: str, model: str, years: list, regio
                             str(item.get("mileageFromOdometer", {}).get("value", ""))
                         )
                         href   = item.get("url") or offer.get("url") or url
-                        listings.append({
-                            "source":      "Cars.com",
-                            "title":       title,
-                            "price":       price,
-                            "mileage":     miles,
-                            "year":        int(year) if year else None,
-                            "make":        make,
-                            "model":       model,
-                            "url":         href,
-                            "color":       color,
-                            "description": item.get("description", ""),
-                            "region":      region["name"],
-                            "posted":      date.today().isoformat(),
-                        })
+                        if title and href:
+                            listings.append({
+                                "source":      "Cars.com",
+                                "title":       title,
+                                "price":       price,
+                                "mileage":     miles,
+                                "year":        int(year) if year else None,
+                                "make":        make,
+                                "model":       model,
+                                "url":         href,
+                                "color":       color,
+                                "description": item.get("description", ""),
+                                "region":      region["name"],
+                                "posted":      date.today().isoformat(),
+                            })
                 except Exception:
                     pass
 
@@ -533,20 +576,21 @@ async def search_cars_dot_com(context, make: str, model: str, years: list, regio
                 href       = await link_el.get_attribute("href") if link_el else ""
                 if href and href.startswith("/"):
                     href = "https://www.cars.com" + href
-                listings.append({
-                    "source":      "Cars.com",
-                    "title":       title,
-                    "price":       extract_price(price_text),
-                    "mileage":     extract_mileage(miles_text),
-                    "year":        extract_year(title),
-                    "make":        make,
-                    "model":       model,
-                    "url":         href,
-                    "color":       "",
-                    "description": title,
-                    "region":      region["name"],
-                    "posted":      date.today().isoformat(),
-                })
+                if title and href:
+                    listings.append({
+                        "source":      "Cars.com",
+                        "title":       title,
+                        "price":       extract_price(price_text),
+                        "mileage":     extract_mileage(miles_text),
+                        "year":        extract_year(title),
+                        "make":        make,
+                        "model":       model,
+                        "url":         href,
+                        "color":       "",
+                        "description": title,
+                        "region":      region["name"],
+                        "posted":      date.today().isoformat(),
+                    })
 
         log.info(f"  Cars.com total: {len(listings)} listings")
 
