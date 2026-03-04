@@ -1,0 +1,51 @@
+name: Daily Car Search
+
+on:
+  schedule:
+    # Runs every day at 7:00 AM Pacific (15:00 UTC)
+    - cron: "0 15 * * *"
+  workflow_dispatch:  # allows manual trigger from GitHub UI
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Restore seen-listings cache so we only alert on truly new posts
+      - name: Restore seen listings cache
+        uses: actions/cache@v4
+        with:
+          path: data/seen_listings.json
+          key: seen-listings-${{ runner.os }}-${{ hashFiles('data/seen_listings.json') }}
+          restore-keys: seen-listings-${{ runner.os }}-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # Install Chromium browser binary (free, cached by Actions)
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      - name: Run car search agent
+        env:
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL:       ${{ secrets.NOTIFY_EMAIL }}
+        run: python src/search_agent.py
+
+      # Persist updated seen-listings for next run
+      - name: Save seen listings cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: data/seen_listings.json
+          key: seen-listings-${{ runner.os }}-${{ hashFiles('data/seen_listings.json') }}
