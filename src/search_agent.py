@@ -15,6 +15,12 @@ Fixes applied:
   - AutoTrader: domcontentloaded instead of networkidle
   - Craigslist: added random delay + realistic headers to avoid bot detection
   - Cars.com: disabled HTTP/2 via context arg to avoid ERR_HTTP2_PROTOCOL_ERROR
+
+v2 additions:
+  - Market value comparison via DealScorer (MarketCheck API + local cache)
+  - Deal grade + savings vs market added to each listing
+  - Email now includes Deal column with grade emoji and % vs market
+  - Regional flag added: listings note SF Bay Area vs Medford in deal context
 """
 
 import os
@@ -33,6 +39,12 @@ from urllib.parse import urlencode, quote_plus
 
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page
+
+# ── Deal scoring integration ──────────────────────────────────────────────────
+# DealScorer lives in the same src/ directory as this file.
+# It reads from car_values_cache.json (same directory) and falls back to a
+# live MarketCheck API call when a vehicle isn't cached yet.
+from deal_scorer import DealScorer, ScrapedListing
 
 # Load environment variables from .env file
 load_dotenv()
@@ -130,6 +142,62 @@ def passes_filters(listing: dict, config: dict) -> bool:
     return True
 
 
+# ── Market value scoring ──────────────────────────────────────────────────────
+
+# Region label → short tag shown in the email Deal column
+REGION_TAGS = {
+    "San Francisco Bay Area": "SF",
+    "Medford, OR":            "MED",
+}
+
+def apply_deal_score(listing: dict, scorer: DealScorer) -> dict:
+    """
+    Runs the listing through DealScorer and attaches three new fields:
+      deal_grade   str   e.g. "🔥 Steal"
+      deal_pct     float e.g. 18.4  (positive = below market, negative = above)
+      deal_vs_avg  int   e.g. -4200 (negative = you save, positive = you overpay)
+      market_avg   int   e.g. 27900
+      deal_data_src str  "cache" or "live_api"
+
+    If no market data is found (new/rare vehicle, API down, no key set),
+    all deal fields are set to None so the email degrades gracefully.
+    """
+    if not listing.get("price") or not listing.get("year"):
+        listing.update({"deal_grade": None, "deal_pct": None,
+                        "deal_vs_avg": None, "market_avg": None,
+                        "deal_data_src": None})
+        return listing
+
+    scraped = ScrapedListing(
+        asking_price = listing["price"],
+        year         = listing["year"],
+        make         = listing["make"],
+        model        = listing["model"],
+        mileage      = listing.get("mileage"),
+        trim         = listing.get("trim"),          # None if not scraped
+        condition    = listing.get("condition"),     # None if not scraped
+        source_url   = listing.get("url"),
+        source_site  = listing.get("source", "").lower().replace(" ", "_"),
+    )
+
+    result = scorer.score(scraped)
+
+    if result:
+        listing["deal_grade"]    = result.grade
+        listing["deal_pct"]      = result.pct_below_market
+        listing["deal_vs_avg"]   = int(result.savings_vs_avg)
+        listing["market_avg"]    = int(result.market_avg)
+        listing["deal_data_src"] = result.data_source
+    else:
+        listing["deal_grade"]    = None
+        listing["deal_pct"]      = None
+        listing["deal_vs_avg"]   = None
+        listing["market_avg"]    = None
+        listing["deal_data_src"] = None
+
+    return listing
+
+
 # ── Utility parsers ───────────────────────────────────────────────────────────
 
 def extract_year(text: str):
@@ -141,22 +209,16 @@ def extract_mileage(text: str):
     if not text:
         return None
     text = str(text).replace(",", "")
-    
-    # Look for explicit mileage patterns with "mi" or "miles" or "k"
-    # This avoids matching years like "2023"
     m = re.search(r"([\d]+)\s*(?:k|mi|miles)", text, re.IGNORECASE)
     if m:
         val = int(m.group(1))
         if val < 1_000 and "k" in text.lower():
             val *= 1_000
         return val if val < 500_000 else None
-    
-    # Look for "odometer: 12345" pattern
     m = re.search(r"odometer[:\s]+(\d+)", text, re.IGNORECASE)
     if m:
         val = int(m.group(1))
         return val if val < 500_000 else None
-    
     return None
 
 
@@ -170,18 +232,13 @@ def extract_price(text: str):
 # ── Browser factory ───────────────────────────────────────────────────────────
 
 async def make_browser(playwright):
-    """
-    Launch a stealth headless Chromium instance.
-    HTTP/2 is disabled at the context level to prevent ERR_HTTP2_PROTOCOL_ERROR
-    on sites like Cars.com that are aggressive about protocol enforcement.
-    """
     browser = await playwright.chromium.launch(
         headless=True,
         args=[
             "--no-sandbox",
             "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
-            "--disable-http2",          # prevents Cars.com HTTP2 errors
+            "--disable-http2",
         ],
     )
     context = await browser.new_context(
@@ -198,7 +255,6 @@ async def make_browser(playwright):
             "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         },
     )
-    # Hide webdriver flag from fingerprinting
     await context.add_init_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
@@ -206,18 +262,13 @@ async def make_browser(playwright):
 
 
 async def human_delay(min_ms: int = 1500, max_ms: int = 3500):
-    """Random pause to avoid bot detection."""
     await asyncio.sleep(random.uniform(min_ms / 1000, max_ms / 1000))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CRAIGSLIST
-#  Strategy: Navigate to search page, wait for results to render, then
-#  extract listings via DOM. Craigslist serves server-rendered HTML so
-#  DOM parsing is reliable here. Random delays reduce bot detection.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# FIX: "santacruz" is not a valid CL subdomain — replaced with "monterey"
 CL_SUBDOMAINS = {
     "San Francisco Bay Area": ["sfbay", "stockton", "modesto", "monterey"],
     "Medford, OR":            ["medford", "eugene", "bend", "roseburg"],
@@ -247,7 +298,6 @@ async def search_craigslist(context, make: str, model: str, years: list, region:
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             await human_delay(2000, 4000)
 
-            # Try intercepting JSON embedded in the page script tags
             json_data = await page.evaluate("""
                 () => {
                     const scripts = document.querySelectorAll('script[type="application/json"]');
@@ -260,7 +310,6 @@ async def search_craigslist(context, make: str, model: str, years: list, region:
 
             site_listings = []
 
-            # Primary: JSON embedded in page
             if json_data:
                 items = []
                 if isinstance(json_data, dict):
@@ -274,55 +323,36 @@ async def search_craigslist(context, make: str, model: str, years: list, region:
                     if title and href:
                         site_listings.append(_cl_listing(title, price, href, make, model, region))
 
-            # Fallback: DOM parsing
             if not site_listings:
                 cards = await page.query_selector_all("[data-pid]")
                 log.info(f"  Found {len(cards)} cards with [data-pid] selector")
                 for card in cards:
-                    # Find the link
                     link_el = await card.query_selector("a[href*='/cto/'], a[href*='/ctd/']")
                     if not link_el:
                         continue
-                    
                     href = await link_el.get_attribute("href")
                     if not href:
                         continue
-                    
-                    # Try to get title from various elements
                     title_text = None
-                    
-                    # Try span.label first
                     label_span = await card.query_selector("span.label")
                     if label_span:
                         title_text = (await label_span.inner_text()).strip()
-                    
-                    # Try .posting-title class
                     if not title_text:
                         title_el = await card.query_selector(".posting-title")
                         if title_el:
                             title_text = (await title_el.inner_text()).strip()
-                    
-                    # Fallback: get all text from card and extract from URL
                     if not title_text:
-                        # Extract from URL slug
-                        import re
                         match = re.search(r'/d/([^/]+)/', href)
                         if match:
                             title_text = match.group(1).replace('-', ' ').title()
-                    
-                    # Get price
                     price_el = await card.query_selector(".price, .priceinfo")
                     price_text = (await price_el.inner_text()).strip() if price_el else ""
-                    
-                    # Get mileage from meta div
                     mileage_text = None
                     meta_el = await card.query_selector(".meta, .meta-line .meta")
                     if meta_el:
                         mileage_text = (await meta_el.inner_text()).strip()
-                    
                     if title_text and href:
                         listing = _cl_listing(title_text, extract_price(price_text), href, make, model, region)
-                        # Override mileage with extracted value from meta
                         if mileage_text:
                             listing["mileage"] = extract_mileage(mileage_text)
                         site_listings.append(listing)
@@ -358,10 +388,6 @@ def _cl_listing(title, price, url, make, model, region) -> dict:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  AUTOTRADER
-#  Strategy: Intercept XHR JSON from AutoTrader's listing API.
-#  Falls back to data-* attribute DOM parsing if interception yields nothing.
-#  FIX: Changed wait_until from "networkidle" to "domcontentloaded" to
-#  prevent hanging on pages with continuous background requests.
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def search_autotrader(context, make: str, model: str, years: list, region: dict) -> list:
@@ -412,11 +438,9 @@ async def search_autotrader(context, make: str, model: str, years: list, region:
                         pass
 
         page.on("response", handle_response)
-        # FIX: domcontentloaded avoids hanging on networkidle
         await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
         await human_delay(3000, 5000)
 
-        # Primary: intercepted JSON
         for item in intercepted_listings:
             price   = extract_price(str(
                 item.get("pricingDetail", {}).get("salePrice", "")
@@ -436,7 +460,7 @@ async def search_autotrader(context, make: str, model: str, years: list, region:
             listings.append({
                 "source":      "AutoTrader",
                 "title":       title,
-                "price":       price,
+                "price":       extract_price(str(price)) if price else None,
                 "mileage":     int(mileage) if mileage else None,
                 "year":        int(year) if year else None,
                 "make":        make,
@@ -448,7 +472,6 @@ async def search_autotrader(context, make: str, model: str, years: list, region:
                 "posted":      date.today().isoformat(),
             })
 
-        # Fallback: DOM with stable data-* attributes
         if not intercepted_listings:
             log.info("  AutoTrader: no intercepted JSON, falling back to DOM")
             cards = await page.query_selector_all(
@@ -495,12 +518,6 @@ async def search_autotrader(context, make: str, model: str, years: list, region:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CARS.COM
-#  Strategy: Three-tier approach:
-#    1. Intercept XHR JSON from the shopping API
-#    2. Extract schema.org JSON-LD embedded in <script> tags (very stable)
-#    3. Final fallback to DOM
-#  FIX: --disable-http2 browser flag prevents ERR_HTTP2_PROTOCOL_ERROR.
-#  FIX: Changed wait_until to "domcontentloaded" to avoid 45s timeout.
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def search_cars_dot_com(context, make: str, model: str, years: list, region: dict) -> list:
@@ -541,11 +558,9 @@ async def search_cars_dot_com(context, make: str, model: str, years: list, regio
                         pass
 
         page.on("response", handle_response)
-        # FIX: domcontentloaded avoids the 45s networkidle timeout
         await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
         await human_delay(3000, 5000)
 
-        # Tier 1: intercepted JSON
         for item in intercepted_listings:
             price   = extract_price(str(item.get("list_price") or item.get("price") or ""))
             mileage = item.get("mileage") or extract_mileage(str(item.get("miles", "")))
@@ -570,7 +585,6 @@ async def search_cars_dot_com(context, make: str, model: str, years: list, regio
                     "posted":      date.today().isoformat(),
                 })
 
-        # Tier 2: JSON-LD schema.org (extremely stable standard)
         if not intercepted_listings:
             log.info("  Cars.com: trying JSON-LD extraction")
             ld_scripts = await page.query_selector_all('script[type="application/ld+json"]')
@@ -609,7 +623,6 @@ async def search_cars_dot_com(context, make: str, model: str, years: list, regio
                 except Exception:
                     pass
 
-        # Tier 3: DOM fallback
         if not listings:
             log.info("  Cars.com: falling back to DOM")
             cards = await page.query_selector_all(
@@ -658,6 +671,65 @@ async def search_cars_dot_com(context, make: str, model: str, years: list, regio
 #  EMAIL
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _deal_cell(listing: dict) -> tuple[str, str]:
+    """
+    Returns (cell_html, sort_key) for the Deal column.
+
+    Layout inside the cell:
+      Line 1 — grade emoji + label          e.g. "🔥 Steal"
+      Line 2 — % vs market + region tag     e.g. "18.4% below  [SF]"
+      Line 3 — savings dollar amount        e.g. "save $4,200"
+
+    If no market data is available, shows a neutral "—" placeholder.
+    """
+    grade    = listing.get("deal_grade")
+    pct      = listing.get("deal_pct")        # positive = below market (good)
+    vs_avg   = listing.get("deal_vs_avg")     # negative = you save (good)
+    mkt_avg  = listing.get("market_avg")
+    region   = listing.get("region", "")
+    region_tag = REGION_TAGS.get(region, region[:3].upper())
+
+    if grade is None or pct is None:
+        return (
+            '<span style="color:#475569;font-size:12px;">— no data</span>',
+            -999
+        )
+
+    # Colour the percentage line: green = good deal, amber = fair, red = over
+    if pct >= 10:
+        pct_color = "#22c55e"
+    elif pct >= 0:
+        pct_color = "#f59e0b"
+    else:
+        pct_color = "#ef4444"
+
+    direction  = "below" if pct >= 0 else "above"
+    pct_str    = f"{abs(pct):.1f}% {direction}"
+
+    # Savings line
+    if vs_avg is not None:
+        if vs_avg < 0:
+            savings_str = f"save ${abs(vs_avg):,}"
+            savings_color = "#22c55e"
+        else:
+            savings_str = f"${vs_avg:,} over"
+            savings_color = "#ef4444"
+    else:
+        savings_str   = ""
+        savings_color = "#94a3b8"
+
+    mkt_str = f"mkt avg ${mkt_avg:,}" if mkt_avg else ""
+
+    cell_html = f"""
+        <span style="font-size:12px;font-weight:700;color:#f1f5f9;">{grade}</span><br>
+        <span style="font-size:11px;color:{pct_color};">{pct_str}</span>
+        <span style="font-size:10px;color:#475569;margin-left:4px;">[{region_tag}]</span><br>
+        <span style="font-size:11px;color:{savings_color};">{savings_str}</span>
+        <span style="font-size:10px;color:#334155;margin-left:4px;">{mkt_str}</span>
+    """
+    return cell_html, pct   # sort key = pct_below_market
+
+
 def build_email_html(results_by_region: dict) -> str:
     today = datetime.now().strftime("%B %d, %Y")
     rows_html = ""
@@ -665,7 +737,7 @@ def build_email_html(results_by_region: dict) -> str:
     for region_name, listings in results_by_region.items():
         rows_html += f"""
         <tr>
-          <td colspan="7" style="background:#1a1a2e;color:#e2e8f0;padding:12px 18px;
+          <td colspan="8" style="background:#1a1a2e;color:#e2e8f0;padding:12px 18px;
               font-size:14px;font-weight:700;letter-spacing:0.06em;
               border-top:2px solid #3b4fd8;">
             📍 {region_name}
@@ -675,7 +747,7 @@ def build_email_html(results_by_region: dict) -> str:
         if not listings:
             rows_html += """
         <tr>
-          <td colspan="7" style="padding:14px 18px;color:#64748b;font-style:italic;">
+          <td colspan="8" style="padding:14px 18px;color:#64748b;font-style:italic;">
             No new listings found today.
           </td>
         </tr>"""
@@ -687,33 +759,39 @@ def build_email_html(results_by_region: dict) -> str:
                     else "#f59e0b" if score_pct >= 40
                     else "#ef4444"
                 )
-                mileage_str = f"{l['mileage']:,}" if l.get("mileage") else "—"
-                price_str   = f"${l['price']:,}" if l.get("price") else "—"
-                color_str   = l.get("color") or "—"
-                row_bg      = "#0f172a" if i % 2 == 0 else "#1e293b"
+                mileage_str  = f"{l['mileage']:,}" if l.get("mileage") else "—"
+                price_str    = f"${l['price']:,}" if l.get("price") else "—"
+                color_str    = l.get("color") or "—"
+                row_bg       = "#0f172a" if i % 2 == 0 else "#1e293b"
+                deal_html, _ = _deal_cell(l)
+
                 rows_html += f"""
         <tr style="background:{row_bg};">
-          <td style="padding:10px 14px;font-weight:700;color:#94a3b8;
-                     font-size:13px;text-align:center;">{i}</td>
-          <td style="padding:10px 14px;">
+          <td style="padding:10px 10px;font-weight:700;color:#94a3b8;
+                     font-size:13px;text-align:center;width:32px;">{i}</td>
+          <td style="padding:10px 12px;min-width:200px;">
             <a href="{l['url']}" style="color:#60a5fa;text-decoration:none;
-               font-weight:600;font-size:13px;">{l['title'][:65]}</a><br>
+               font-weight:600;font-size:13px;">{l['title'][:60]}</a><br>
             <span style="font-size:11px;color:#475569;">{l['source']}</span>
           </td>
-          <td style="padding:10px 14px;color:#f1f5f9;font-weight:600;">{price_str}</td>
-          <td style="padding:10px 14px;color:#cbd5e1;">{mileage_str} mi</td>
-          <td style="padding:10px 14px;color:#94a3b8;font-size:12px;">{color_str}</td>
-          <td style="padding:10px 14px;text-align:center;">
+          <td style="padding:10px 10px;color:#f1f5f9;font-weight:600;
+                     white-space:nowrap;">{price_str}</td>
+          <td style="padding:10px 10px;color:#cbd5e1;white-space:nowrap;">{mileage_str} mi</td>
+          <td style="padding:10px 10px;color:#94a3b8;font-size:12px;">{color_str}</td>
+          <td style="padding:10px 12px;min-width:160px;">{deal_html}</td>
+          <td style="padding:10px 10px;text-align:center;white-space:nowrap;">
             <span style="background:{score_color}20;color:{score_color};
                 padding:3px 9px;border-radius:20px;font-size:12px;
                 font-weight:800;letter-spacing:0.03em;">{score_pct}</span>
           </td>
-          <td style="padding:10px 14px;color:#475569;font-size:11px;">{l.get('posted','')}</td>
+          <td style="padding:10px 10px;color:#475569;font-size:11px;
+                     white-space:nowrap;">{l.get('posted','')}</td>
         </tr>"""
 
-    col_headers = ["#", "Listing", "Price", "Miles", "Color", "Score", "Posted"]
+    # 8 columns now (added Deal)
+    col_headers = ["#", "Listing", "Price", "Miles", "Color", "Deal vs Market", "Score", "Posted"]
     col_html = "".join(
-        f'<td style="padding:9px 14px;color:#334155;font-size:10px;'
+        f'<td style="padding:9px 12px;color:#334155;font-size:10px;'
         f'text-transform:uppercase;letter-spacing:0.1em;font-weight:700;">{h}</td>'
         for h in col_headers
     )
@@ -724,12 +802,12 @@ def build_email_html(results_by_region: dict) -> str:
 <body style="margin:0;padding:0;background:#080f1a;font-family:'Segoe UI',system-ui,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0">
   <tr><td align="center" style="padding:32px 16px;">
-  <table width="860" cellpadding="0" cellspacing="0"
+  <table width="960" cellpadding="0" cellspacing="0"
          style="border-radius:14px;overflow:hidden;border:1px solid #1e293b;
                 box-shadow:0 20px 60px rgba(0,0,0,0.6);">
 
     <tr>
-      <td colspan="7"
+      <td colspan="8"
           style="background:linear-gradient(135deg,#0f2744 0%,#1a1a2e 100%);
                  padding:28px 24px;border-bottom:1px solid #1e3a5f;">
         <div style="font-size:24px;font-weight:900;color:#f1f5f9;
@@ -737,6 +815,7 @@ def build_email_html(results_by_region: dict) -> str:
         <div style="font-size:12px;color:#475569;margin-top:6px;letter-spacing:0.04em;">
           {today} &nbsp;·&nbsp; Honda CR-V &amp; Mazda CX-5
           &nbsp;·&nbsp; AWD &nbsp;·&nbsp; Private Party &nbsp;·&nbsp; &lt;70,000 mi
+          &nbsp;·&nbsp; Deal scores vs national market avg
         </div>
       </td>
     </tr>
@@ -748,12 +827,15 @@ def build_email_html(results_by_region: dict) -> str:
     {rows_html}
 
     <tr>
-      <td colspan="7"
+      <td colspan="8"
           style="background:#080f1a;padding:14px 24px;
                  color:#1e293b;font-size:11px;border-top:1px solid #0f172a;">
-        Score: year 40% · mileage 40% · price 20% &nbsp;|&nbsp;
-        Green ≥65 · Yellow ≥40 · Red &lt;40 &nbsp;|&nbsp;
-        New listings only · Powered by Playwright
+        Score: year 40% · mileage 40% · price 20%
+        &nbsp;|&nbsp; Green ≥65 · Yellow ≥40 · Red &lt;40
+        &nbsp;|&nbsp; Deal vs Market: MarketCheck national avg (mileage-adjusted)
+        &nbsp;|&nbsp; [SF] = Bay Area listing · [MED] = Medford listing
+        &nbsp;·&nbsp; SF prices typically run higher than national avg
+        &nbsp;|&nbsp; New listings only · Powered by Playwright
       </td>
     </tr>
 
@@ -786,6 +868,11 @@ async def run():
     new_seen: set = set()
     results_by_region: dict = {}
 
+    # One scorer instance shared across all listings — it holds the cache
+    # in memory and reuses it, so each unique vehicle is only fetched once
+    # even if multiple listings match the same make/model/year.
+    scorer = DealScorer()
+
     async with async_playwright() as pw:
         browser, context = await make_browser(pw)
         try:
@@ -814,7 +901,13 @@ async def run():
                             continue
                         if not passes_filters(listing, config):
                             continue
+
+                        # ── Existing value score (unchanged) ──
                         listing["score"] = value_score(listing, config)
+
+                        # ── NEW: market deal score ──────────────
+                        listing = apply_deal_score(listing, scorer)
+
                         region_listings.append(listing)
                         new_seen.add(lid)
 
@@ -827,6 +920,12 @@ async def run():
             await browser.close()
 
     save_seen(seen | new_seen)
+
+    api_stats = scorer.stats()
+    log.info(
+        f"\nDeal scorer: {api_stats['scored']} listings scored  |  "
+        f"{api_stats['live_api_calls']} live MarketCheck API calls made"
+    )
 
     total   = sum(len(v) for v in results_by_region.values())
     subject = f"🚗 Car Deal Digest — {total} new listings · {date.today().strftime('%b %d')}"
