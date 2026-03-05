@@ -865,7 +865,8 @@ def send_email(subject: str, html: str):
 async def run():
     config   = load_config()
     seen     = load_seen()
-    new_seen: set = set()
+    current_live_hashes: set = set()  # All listings found in this search run
+    new_listings_to_notify: set = set()  # New listings to email about
     results_by_region: dict = {}
 
     # One scorer instance shared across all listings — it holds the cache
@@ -895,8 +896,12 @@ async def run():
 
                     for listing in raw:
                         lid = listing_id(listing)
-                        if lid in seen or lid in new_seen:
-                            continue
+                        current_live_hashes.add(lid)  # Track all live listings
+                        
+                        if lid in seen:
+                            continue  # Already notified, skip
+                        if lid in new_listings_to_notify:
+                            continue  # Already added to this batch
                         if not listing.get("url"):
                             continue
                         if not passes_filters(listing, config):
@@ -909,7 +914,7 @@ async def run():
                         listing = apply_deal_score(listing, scorer)
 
                         region_listings.append(listing)
-                        new_seen.add(lid)
+                        new_listings_to_notify.add(lid)
 
                 region_listings.sort(key=lambda x: x["score"], reverse=True)
                 results_by_region[region["name"]] = region_listings[:25]
@@ -919,7 +924,13 @@ async def run():
             await context.close()
             await browser.close()
 
-    save_seen(seen | new_seen)
+    # Update seen_listings: only keep currently live listings
+    # This automatically removes sold/expired listings
+    save_seen(current_live_hashes)
+    
+    removed_count = len(seen - current_live_hashes)
+    if removed_count > 0:
+        log.info(f"\n🗑️  Removed {removed_count} sold/expired listings from tracking")
 
     api_stats = scorer.stats()
     log.info(
