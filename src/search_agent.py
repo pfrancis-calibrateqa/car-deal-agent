@@ -31,7 +31,11 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from urllib.parse import urlencode, quote_plus
 
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page
+
+# Load environment variables from .env file
+load_dotenv()
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -137,12 +141,22 @@ def extract_mileage(text: str):
     if not text:
         return None
     text = str(text).replace(",", "")
-    m = re.search(r"([\d]+)\s*(?:mi|miles)?", text, re.IGNORECASE)
+    
+    # Look for explicit mileage patterns with "mi" or "miles" or "k"
+    # This avoids matching years like "2023"
+    m = re.search(r"([\d]+)\s*(?:k|mi|miles)", text, re.IGNORECASE)
     if m:
         val = int(m.group(1))
         if val < 1_000 and "k" in text.lower():
             val *= 1_000
         return val if val < 500_000 else None
+    
+    # Look for "odometer: 12345" pattern
+    m = re.search(r"odometer[:\s]+(\d+)", text, re.IGNORECASE)
+    if m:
+        val = int(m.group(1))
+        return val if val < 500_000 else None
+    
     return None
 
 
@@ -210,24 +224,26 @@ CL_SUBDOMAINS = {
 }
 
 
-async def search_craigslist(context, make: str, model: str, years: list, region: dict) -> list:
+async def search_craigslist(context, make: str, model: str, years: list, region: dict, config: dict) -> list:
     listings = []
     sites = CL_SUBDOMAINS.get(region["name"], ["sfbay"])
     min_year, max_year = min(years), max(years)
+    max_mileage = config["filters"]["max_mileage"]
 
     for site in sites:
         params = urlencode({
             "query":           f"{make} {model}",
             "min_auto_year":   min_year,
             "max_auto_year":   max_year,
-            "auto_drivetrain": 4,   # AWD/4WD code
-            "private_only":    1,
+            "max_auto_miles":  max_mileage,
+            "purveyor":        "owner",
             "s":               0,
         })
-        url = f"https://{site}.craigslist.org/search/cto?{params}"
+        url = f"https://{site}.craigslist.org/search/cta?{params}"
 
         page: Page = await context.new_page()
         try:
+            log.debug(f"  Craigslist URL: {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             await human_delay(2000, 4000)
 
@@ -260,20 +276,56 @@ async def search_craigslist(context, make: str, model: str, years: list, region:
 
             # Fallback: DOM parsing
             if not site_listings:
-                cards = await page.query_selector_all("li.cl-static-search-result")
+                cards = await page.query_selector_all("[data-pid]")
+                log.info(f"  Found {len(cards)} cards with [data-pid] selector")
                 for card in cards:
-                    title_el = await card.query_selector(".title")
-                    price_el = await card.query_selector(".price")
-                    link_el  = await card.query_selector("a")
-                    if not title_el:
+                    # Find the link
+                    link_el = await card.query_selector("a[href*='/cto/'], a[href*='/ctd/']")
+                    if not link_el:
                         continue
-                    title      = (await title_el.inner_text()).strip()
+                    
+                    href = await link_el.get_attribute("href")
+                    if not href:
+                        continue
+                    
+                    # Try to get title from various elements
+                    title_text = None
+                    
+                    # Try span.label first
+                    label_span = await card.query_selector("span.label")
+                    if label_span:
+                        title_text = (await label_span.inner_text()).strip()
+                    
+                    # Try .posting-title class
+                    if not title_text:
+                        title_el = await card.query_selector(".posting-title")
+                        if title_el:
+                            title_text = (await title_el.inner_text()).strip()
+                    
+                    # Fallback: get all text from card and extract from URL
+                    if not title_text:
+                        # Extract from URL slug
+                        import re
+                        match = re.search(r'/d/([^/]+)/', href)
+                        if match:
+                            title_text = match.group(1).replace('-', ' ').title()
+                    
+                    # Get price
+                    price_el = await card.query_selector(".price, .priceinfo")
                     price_text = (await price_el.inner_text()).strip() if price_el else ""
-                    href       = await link_el.get_attribute("href") if link_el else ""
-                    if title and href:
-                        site_listings.append(
-                            _cl_listing(title, extract_price(price_text), href, make, model, region)
-                        )
+                    
+                    # Get mileage from meta div
+                    mileage_text = None
+                    meta_el = await card.query_selector(".meta, .meta-line .meta")
+                    if meta_el:
+                        mileage_text = (await meta_el.inner_text()).strip()
+                    
+                    if title_text and href:
+                        listing = _cl_listing(title_text, extract_price(price_text), href, make, model, region)
+                        # Override mileage with extracted value from meta
+                        if mileage_text:
+                            listing["mileage"] = extract_mileage(mileage_text)
+                        site_listings.append(listing)
 
             listings.extend(site_listings)
             log.info(f"  Craigslist [{site}]: {len(site_listings)} listings")
@@ -750,7 +802,7 @@ async def run():
                     log.info(f"\n-> {make} {model} ({min(years)}-{max(years)})")
 
                     raw: list[dict] = []
-                    raw += await search_craigslist(context, make, model, years, region)
+                    raw += await search_craigslist(context, make, model, years, region, config)
                     raw += await search_autotrader(context, make, model, years, region)
                     raw += await search_cars_dot_com(context, make, model, years, region)
 
