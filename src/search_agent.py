@@ -267,6 +267,51 @@ async def human_delay(min_ms: int = 1500, max_ms: int = 3500):
 
 # ── Deep Inspection ───────────────────────────────────────────────────────────
 
+# ── Deep Inspection ───────────────────────────────────────────────────────────
+
+def extract_trim_from_title(title: str, make: str, model: str) -> str:
+    """
+    Extract trim level from listing title.
+    Common Honda CR-V trims: LX, EX, EX-L, EXL, Touring, Sport
+    Common Mazda CX-5 trims: Sport, Touring, Grand Touring, Carbon, Signature
+    """
+    if not title:
+        return None
+    
+    # Remove make and model from title to isolate trim
+    title_clean = title.upper()
+    if make:
+        title_clean = title_clean.replace(make.upper(), "")
+    if model:
+        title_clean = title_clean.replace(model.upper().replace("-", " "), "")
+        title_clean = title_clean.replace(model.upper().replace("-", ""), "")
+    
+    # Common trim patterns
+    trim_patterns = {
+        # Honda CR-V
+        "TOURING": "Touring",
+        "EX-L": "EX-L",
+        "EXL": "EX-L",
+        "EX ": "EX",
+        " EX": "EX",
+        "LX": "LX",
+        "SPORT": "Sport",
+        
+        # Mazda CX-5
+        "SIGNATURE": "Signature",
+        "GRAND TOURING": "Grand Touring",
+        "CARBON": "Carbon",
+        # "TOURING": "Touring",  # Already covered above
+        # "SPORT": "Sport",      # Already covered above
+    }
+    
+    for pattern, trim_name in trim_patterns.items():
+        if pattern in title_clean:
+            return trim_name
+    
+    return None
+
+
 async def deep_inspect_listing(page: Page, listing: dict) -> dict:
     """
     Visit a listing URL and extract detailed information including title status.
@@ -300,6 +345,13 @@ async def deep_inspect_listing(page: Page, listing: dict) -> dict:
                         trans_span = spans[i + 1]
                         transmission = (await trans_span.inner_text()).strip()
         
+        # Extract full title for trim parsing
+        title_el = await page.query_selector('#titletextonly')
+        full_title = (await title_el.inner_text()).strip() if title_el else listing.get("title", "")
+        
+        # Extract trim from title (common patterns)
+        trim = extract_trim_from_title(full_title, listing.get("make"), listing.get("model"))
+        
         # Extract full description
         body_el = await page.query_selector('#postingbody')
         description = (await body_el.inner_text()).strip() if body_el else ""
@@ -330,6 +382,8 @@ async def deep_inspect_listing(page: Page, listing: dict) -> dict:
         # Add extracted data to listing
         listing["title_status"] = title_status
         listing["transmission"] = transmission
+        if trim:
+            listing["trim"] = trim  # This will be used by DealScorer
         listing["full_description"] = description[:500]  # First 500 chars
         
         return listing

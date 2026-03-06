@@ -36,6 +36,8 @@ async def test():
                 print(f"\nTitle: {listing['title']}")
                 print(f"URL: {listing['url']}")
                 print(f"Title Status: {listing.get('title_status', 'N/A')}")
+                print(f"Transmission: {listing.get('transmission', 'N/A')}")
+                print(f"Trim: {listing.get('trim', 'N/A')}")
                 print(f"Description: {listing.get('full_description', 'N/A')[:100]}...")
             
             print(f"\n✓ {len(results)} listings passed inspection")
