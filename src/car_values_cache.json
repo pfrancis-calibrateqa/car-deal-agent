@@ -3,12 +3,25 @@
     "source": "MarketCheck API (https://www.marketcheck.com)",
     "endpoint": "https://api.marketcheck.com/v2/search/car/active",
     "config_file": "/Users/pfrancis/Desktop/Development/car-deal-agent/config/search_criteria.json",
-    "fetched_at": "2026-03-05T16:22:34.144267+00:00",
-    "vehicles_requested": 15,
-    "vehicles_with_data": 15,
+    "fetched_at": "2026-03-05T22:34:10.219801+00:00",
+    "vehicles_requested": 19,
+    "vehicles_with_data": 19,
     "notes": "Prices are averages across active used-car listings nationwide. MarketCheck free tier: 500 calls/month. Refresh this file daily or weekly. Vehicle list automatically synced from search_criteria.json."
   },
   "vehicles": [
+    {
+      "year": 2010,
+      "make": "Honda",
+      "model": "CR-V",
+      "trim": null,
+      "listings_count": 710,
+      "price_avg": 8929,
+      "price_min": 2900,
+      "price_max": 25555,
+      "price_median": 8900,
+      "mileage_avg": 152040,
+      "fetch_status": "success"
+    },
     {
       "year": 2012,
       "make": "Honda",
@@ -36,19 +49,6 @@
       "fetch_status": "success"
     },
     {
-      "year": 2014,
-      "make": "Honda",
-      "model": "CR-V",
-      "trim": null,
-      "listings_count": 1858,
-      "price_avg": 12539,
-      "price_min": 4688,
-      "price_max": 30000,
-      "price_median": 12477,
-      "mileage_avg": 129131,
-      "fetch_status": "success"
-    },
-    {
       "year": 2016,
       "make": "Honda",
       "model": "CR-V",
@@ -59,6 +59,19 @@
       "price_max": 33785,
       "price_median": 14981,
       "mileage_avg": 113068,
+      "fetch_status": "success"
+    },
+    {
+      "year": 2019,
+      "make": "Honda",
+      "model": "CR-V",
+      "trim": null,
+      "listings_count": 2071,
+      "price_avg": 20335,
+      "price_min": 9417,
+      "price_max": 34766,
+      "price_median": 19998,
+      "mileage_avg": 83896,
       "fetch_status": "success"
     },
     {
@@ -114,16 +127,16 @@
       "fetch_status": "success"
     },
     {
-      "year": 2013,
-      "make": "Mazda",
-      "model": "CX-5",
+      "year": 2024,
+      "make": "Honda",
+      "model": "CR-V",
       "trim": null,
-      "listings_count": 261,
-      "price_avg": 10258,
-      "price_min": 4495,
-      "price_max": 60000,
-      "price_median": 9846,
-      "mileage_avg": 137286,
+      "listings_count": 3853,
+      "price_avg": 31429,
+      "price_min": 13980,
+      "price_max": 44090,
+      "price_median": 31388,
+      "mileage_avg": 31169,
       "fetch_status": "success"
     },
     {
@@ -137,6 +150,19 @@
       "price_max": 29220,
       "price_median": 11980,
       "mileage_avg": 122101,
+      "fetch_status": "success"
+    },
+    {
+      "year": 2017,
+      "make": "Mazda",
+      "model": "CX-5",
+      "trim": null,
+      "listings_count": 530,
+      "price_avg": 15742,
+      "price_min": 7180,
+      "price_max": 23590,
+      "price_median": 15800,
+      "mileage_avg": 94638,
       "fetch_status": "success"
     },
     {
@@ -202,6 +228,32 @@
       "price_max": 41695,
       "price_median": 24914,
       "mileage_avg": 32350,
+      "fetch_status": "success"
+    },
+    {
+      "year": 2024,
+      "make": "Mazda",
+      "model": "CX-5",
+      "trim": null,
+      "listings_count": 2239,
+      "price_avg": 25184,
+      "price_min": 16900,
+      "price_max": 40000,
+      "price_median": 24507,
+      "mileage_avg": 32760,
+      "fetch_status": "success"
+    },
+    {
+      "year": 2025,
+      "make": "Mazda",
+      "model": "CX-5",
+      "trim": null,
+      "listings_count": 2945,
+      "price_avg": 28106,
+      "price_min": 18995,
+      "price_max": 47150,
+      "price_median": 26989,
+      "mileage_avg": 15527,
       "fetch_status": "success"
     }
   ]

@@ -265,12 +265,109 @@ async def human_delay(min_ms: int = 1500, max_ms: int = 3500):
     await asyncio.sleep(random.uniform(min_ms / 1000, max_ms / 1000))
 
 
+# ── Deep Inspection ───────────────────────────────────────────────────────────
+
+async def deep_inspect_listing(page: Page, listing: dict) -> dict:
+    """
+    Visit a listing URL and extract detailed information including title status.
+    Returns the listing dict with added fields: title_status, detailed_condition.
+    Returns None if the listing should be filtered out (salvage, etc.).
+    """
+    url = listing.get("url")
+    if not url:
+        return listing
+    
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+        await asyncio.sleep(0.5)  # Brief pause for content to render
+        
+        # Extract title status from attributes
+        title_status = None
+        attr_groups = await page.query_selector_all('.attrgroup')
+        for group in attr_groups:
+            spans = await group.query_selector_all('span')
+            for i, span in enumerate(spans):
+                text = await span.inner_text()
+                if 'title status:' in text.lower():
+                    # Next span should have the value
+                    if i + 1 < len(spans):
+                        status_span = spans[i + 1]
+                        title_status = (await status_span.inner_text()).strip()
+                        break
+        
+        # Extract full description
+        body_el = await page.query_selector('#postingbody')
+        description = (await body_el.inner_text()).strip() if body_el else ""
+        
+        # Check for red flags
+        red_flags = ["salvage", "rebuilt", "flood", "lemon", "branded"]
+        combined_text = f"{title_status or ''} {description}".lower()
+        
+        has_red_flag = any(flag in combined_text for flag in red_flags)
+        
+        if has_red_flag:
+            log.info(f"  ⚠️  Filtered out (title issue): {listing.get('title', '')[:50]}")
+            return None
+        
+        # Add extracted data to listing
+        listing["title_status"] = title_status
+        listing["full_description"] = description[:500]  # First 500 chars
+        
+        return listing
+        
+    except Exception as e:
+        log.warning(f"  Deep inspection failed for {url[:50]}: {e}")
+        # On error, return the listing (don't filter it out due to inspection failure)
+        return listing
+
+
+async def deep_inspect_listings(context, listings: list[dict], concurrency: int = 5) -> list[dict]:
+    """
+    Concurrently inspect multiple listings for detailed information.
+    Returns filtered list with only clean-title vehicles.
+    """
+    if not listings:
+        return []
+    
+    log.info(f"\n🔍 Deep inspecting {len(listings)} listings (checking title status)...")
+    
+    inspected = []
+    
+    # Process in batches for concurrency control
+    for i in range(0, len(listings), concurrency):
+        batch = listings[i:i + concurrency]
+        
+        async def inspect_one(listing):
+            page = await context.new_page()
+            try:
+                result = await deep_inspect_listing(page, listing)
+                return result
+            finally:
+                await page.close()
+                await human_delay(500, 1000)  # Small delay between requests
+        
+        # Process batch concurrently
+        results = await asyncio.gather(*[inspect_one(l) for l in batch], return_exceptions=True)
+        
+        # Filter out None results (filtered listings) and exceptions
+        for result in results:
+            if result is not None and not isinstance(result, Exception):
+                inspected.append(result)
+    
+    filtered_count = len(listings) - len(inspected)
+    if filtered_count > 0:
+        log.info(f"  ✓ Filtered out {filtered_count} listings with title issues")
+    log.info(f"  ✓ {len(inspected)} clean listings remaining")
+    
+    return inspected
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  CRAIGSLIST
 # ══════════════════════════════════════════════════════════════════════════════
 
 CL_SUBDOMAINS = {
-    "San Francisco Bay Area": ["sfbay", "stockton", "modesto", "monterey"],
+    "San Francisco Bay Area": ["sfbay", "sacramento", "stockton", "modesto", "monterey"],
     "Medford, OR":            ["medford", "eugene", "bend", "roseburg"],
 }
 
@@ -917,6 +1014,11 @@ async def run():
                         new_listings_to_notify.add(lid)
 
                 region_listings.sort(key=lambda x: x["score"], reverse=True)
+                
+                # ── Deep inspection: check title status on listing pages ──
+                if region_listings:
+                    region_listings = await deep_inspect_listings(context, region_listings, concurrency=5)
+                
                 results_by_region[region["name"]] = region_listings[:25]
                 log.info(f"\n✓ {region['name']}: {len(region_listings)} qualifying new listings")
 
