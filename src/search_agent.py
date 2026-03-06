@@ -281,8 +281,9 @@ async def deep_inspect_listing(page: Page, listing: dict) -> dict:
         await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
         await asyncio.sleep(0.5)  # Brief pause for content to render
         
-        # Extract title status from attributes
+        # Extract title status and transmission from attributes
         title_status = None
+        transmission = None
         attr_groups = await page.query_selector_all('.attrgroup')
         for group in attr_groups:
             spans = await group.query_selector_all('span')
@@ -293,13 +294,22 @@ async def deep_inspect_listing(page: Page, listing: dict) -> dict:
                     if i + 1 < len(spans):
                         status_span = spans[i + 1]
                         title_status = (await status_span.inner_text()).strip()
-                        break
+                elif 'transmission:' in text.lower():
+                    # Next span should have the value
+                    if i + 1 < len(spans):
+                        trans_span = spans[i + 1]
+                        transmission = (await trans_span.inner_text()).strip()
         
         # Extract full description
         body_el = await page.query_selector('#postingbody')
         description = (await body_el.inner_text()).strip() if body_el else ""
         
-        # Check for red flags
+        # Check for automatic transmission
+        if transmission and 'automatic' in transmission.lower():
+            log.info(f"  ⚠️  Filtered out (automatic transmission): {listing.get('title', '')[:50]}")
+            return None
+        
+        # Check for red flags in title status and description
         red_flags = ["salvage", "rebuilt", "flood", "lemon", "branded"]
         combined_text = f"{title_status or ''} {description}".lower()
         
@@ -309,8 +319,17 @@ async def deep_inspect_listing(page: Page, listing: dict) -> dict:
             log.info(f"  ⚠️  Filtered out (title issue): {listing.get('title', '')[:50]}")
             return None
         
+        # Check for non-running vehicle phrases
+        non_running_phrases = ["won't start", "wont start", "doesn't start", "doesnt start", "does not start", "will not start"]
+        has_non_running = any(phrase in combined_text for phrase in non_running_phrases)
+        
+        if has_non_running:
+            log.info(f"  ⚠️  Filtered out (won't start): {listing.get('title', '')[:50]}")
+            return None
+        
         # Add extracted data to listing
         listing["title_status"] = title_status
+        listing["transmission"] = transmission
         listing["full_description"] = description[:500]  # First 500 chars
         
         return listing
