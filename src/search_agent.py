@@ -304,9 +304,9 @@ async def deep_inspect_listing(page: Page, listing: dict) -> dict:
         body_el = await page.query_selector('#postingbody')
         description = (await body_el.inner_text()).strip() if body_el else ""
         
-        # Check for automatic transmission
-        if transmission and 'automatic' in transmission.lower():
-            log.info(f"  ⚠️  Filtered out (automatic transmission): {listing.get('title', '')[:50]}")
+        # Check for manual transmission (filter out manual, keep automatic)
+        if transmission and 'manual' in transmission.lower():
+            log.info(f"  ⚠️  Filtered out (manual transmission): {listing.get('title', '')[:50]}")
             return None
         
         # Check for red flags in title status and description
@@ -375,7 +375,7 @@ async def deep_inspect_listings(context, listings: list[dict], concurrency: int 
     
     filtered_count = len(listings) - len(inspected)
     if filtered_count > 0:
-        log.info(f"  ✓ Filtered out {filtered_count} listings with title issues")
+        log.info(f"  ✓ Filtered out {filtered_count} listings (title/transmission/condition issues)")
     log.info(f"  ✓ {len(inspected)} clean listings remaining")
     
     return inspected
