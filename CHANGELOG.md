@@ -45,6 +45,17 @@
 - All inline styles for maximum email client compatibility
 - Touch-friendly buttons (44px minimum height)
 - Readable font sizes (no zooming required)
+- Top Pick section optimized for mobile:
+  - Metrics stack in 2-column grid on mobile
+  - CTA button becomes full-width
+  - Proper spacing and padding
+- Red Flag section maintains gradient background on mobile
+- Typography optimized for readability:
+  - Title: 18px with 1.3 line-height
+  - Price: 24px, bold, green
+  - Metrics: 14px with 1.6 line-height
+  - Source: 12px
+- Touch targets meet accessibility guidelines (44px minimum)
 
 **Email Client Compatibility:**
 - Tested in Gmail (iOS/Android/Web)
@@ -53,6 +64,60 @@
 
 **Files Modified:**
 - `src/search_agent.py` - Added mobile card functions and responsive CSS
+
+---
+
+### ✅ Added: Error Handling and Always-Send Email
+
+**Feature:** Script now tracks errors and always sends email notification, even when scraping fails.
+
+**Problem Solved:** Previously, if any scraping source failed, the entire script would crash and no email would be sent. Users had no visibility into failures and would miss all listings if even one source had issues.
+
+**How It Works:**
+- `ErrorHandler` class tracks all scraping errors
+- Each source (Craigslist, AutoTrader, Cars.com) wrapped in try-except
+- Errors are recorded but don't stop execution
+- Email always sent regardless of success/failure
+- Error section appears in email when issues occur
+- Subject line reflects status (success, partial failure, complete failure)
+- Last successful run timestamp persisted to disk
+
+**Error Section in Email:**
+```
+⚠️ SCRAPING ISSUES
+Some sources encountered errors:
+
+❌ AutoTrader
+Error: ConnectionError - Network timeout
+Time: 2026-03-08 15:30:45
+
+🔧 Troubleshooting:
+• Try running manually: python src/search_agent.py
+• Check internet connection and site availability
+• Review logs for detailed error information
+```
+
+**Email Subject Lines:**
+- Success: "🚗 Daily Car Deal Digest: 10 listings, 3 great deals"
+- Partial failure: "🚗 Daily Car Deal Digest: 5 listings (⚠️ some sources failed)"
+- No listings: "🚗 Daily Car Deal Digest: No new listings today"
+- Complete failure: "🚗 Daily Car Deal Digest: ⚠️ Scraping failed"
+
+**Implementation Details:**
+- `ScrapingError` dataclass - Stores error details (source, type, message, timestamp)
+- `ErrorHandler` class with methods:
+  - `record_error()` - Records errors without stopping execution
+  - `has_errors()` - Checks if any errors occurred
+  - `build_error_section()` - Generates HTML error section for email
+  - `get_email_subject()` - Generates status-aware subject line
+  - `save_last_run()` / `load_last_run()` - Persists last successful run timestamp
+- Last run file: `data/last_successful_run.txt` (gitignored)
+- All tests passing in `test_error_handler.py`
+
+**Files Modified:**
+- `src/search_agent.py` - Added ErrorHandler class and ScrapingError dataclass
+- `.gitignore` - Added last_successful_run.txt
+- `test_error_handler.py` - Comprehensive unit tests
 
 ---
 

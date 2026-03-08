@@ -20,6 +20,39 @@
     .desktop-table { display: none !important; }
     .mobile-cards { display: block !important; }
     
+    /* Top Pick mobile optimization */
+    .top-pick-container {
+      display: block !important;
+    }
+    
+    .top-pick-content {
+      margin-bottom: 16px !important;
+    }
+    
+    .top-pick-metrics {
+      display: grid !important;
+      grid-template-columns: 1fr 1fr !important;
+      gap: 12px !important;
+    }
+    
+    .top-pick-cta {
+      margin-left: 0 !important;
+      width: 100% !important;
+    }
+    
+    .top-pick-cta a {
+      display: block !important;
+      width: 100% !important;
+      text-align: center !important;
+      box-sizing: border-box !important;
+    }
+    
+    /* Red Flag section mobile optimization */
+    .red-flag-warning {
+      font-size: 12px !important;
+      line-height: 1.6 !important;
+    }
+    
     /* Mobile card styles */
     .mobile-card {
       background: #1e293b;
@@ -112,8 +145,8 @@
     <tr>
       <td colspan="8" style="background:linear-gradient(135deg,#1e3a8a 0%,#3b4fd8 100%);
                              padding:20px 24px;border-bottom:2px solid #60a5fa;">
-        <div style="display:flex;align-items:center;justify-content:space-between;">
-          <div style="flex:1;">
+        <div class="top-pick-container" style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="top-pick-content" style="flex:1;">
             <div style="font-size:14px;color:#93c5fd;font-weight:600;
                        letter-spacing:0.05em;margin-bottom:8px;">
               🔥 TOP PICK TODAY
@@ -125,7 +158,7 @@
             <div style="font-size:13px;color:#cbd5e1;margin-bottom:12px;">
               Craigslist · San Francisco Bay Area [SF]
             </div>
-            <div style="display:flex;gap:35px;flex-wrap:wrap;">
+            <div class="top-pick-metrics" style="display:flex;gap:35px;flex-wrap:wrap;">
               <div style="margin-bottom:12px;min-width:100px;">
                 <div style="font-size:11px;color:#cbd5e1;text-transform:uppercase;
                            letter-spacing:0.05em;">Price</div>
@@ -163,7 +196,7 @@
               </div>
             </div>
           </div>
-          <div style="margin-left:20px;">
+          <div class="top-pick-cta" style="margin-left:20px;">
             <a href="https://sfbay.craigslist.org/test1" 
                style="display:inline-block;background:#4ade80;color:#0f172a;
                       padding:14px 28px;border-radius:8px;text-decoration:none;

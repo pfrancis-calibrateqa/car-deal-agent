@@ -37,6 +37,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from urllib.parse import urlencode, quote_plus
+from dataclasses import dataclass
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page
@@ -148,6 +150,113 @@ class ProgressManager:
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
         return json.load(f)
+# ── Error Handling ────────────────────────────────────────────────────────────
+
+@dataclass
+class ScrapingError:
+    """Represents a scraping error."""
+    source: str
+    error_type: str
+    message: str
+    timestamp: datetime
+
+
+class ErrorHandler:
+    """Manages error tracking and reporting for scraping operations."""
+
+    def __init__(self):
+        self.errors: List[ScrapingError] = []
+        self.last_successful_run: Optional[datetime] = None
+        self.last_run_file = ROOT / "data" / "last_successful_run.txt"
+        self.load_last_run()
+
+    def record_error(self, source: str, error: Exception):
+        """Record a scraping error."""
+        self.errors.append(ScrapingError(
+            source=source,
+            error_type=type(error).__name__,
+            message=str(error),
+            timestamp=datetime.now()
+        ))
+        log.error(f"Error recorded for {source}: {type(error).__name__} - {error}")
+
+    def has_errors(self) -> bool:
+        """Check if any errors occurred."""
+        return len(self.errors) > 0
+
+    def build_error_section(self) -> str:
+        """Build HTML error section for email."""
+        if not self.errors:
+            return ""
+
+        html = """
+        <tr>
+          <td colspan="8" style="background:linear-gradient(135deg,#78350f 0%,#92400e 100%);padding:16px 24px;border-bottom:2px solid #f59e0b;">
+            <div style="font-size:14px;color:#fbbf24;font-weight:600;margin-bottom:8px;">
+              ⚠️ SCRAPING ISSUES
+            </div>
+            <div style="font-size:13px;color:#fde68a;line-height:1.6;">
+              Some sources encountered errors:
+            </div>
+        """
+
+        for error in self.errors:
+            html += f"""
+            <div style="margin-top:12px;padding:12px;background:#451a03;border-radius:4px;">
+              <div style="font-weight:600;color:#fbbf24;">❌ {error.source}</div>
+              <div style="font-size:12px;color:#fde68a;margin-top:4px;">
+                Error: {error.error_type} - {error.message[:200]}
+              </div>
+              <div style="font-size:11px;color:#a16207;margin-top:4px;">
+                Time: {error.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+              </div>
+            </div>
+            """
+
+        html += """
+            <div style="margin-top:16px;font-size:12px;color:#fde68a;">
+              🔧 Troubleshooting:<br>
+              • Try running manually: <code style="background:#451a03;padding:2px 6px;border-radius:3px;">python src/search_agent.py</code><br>
+              • Check internet connection and site availability<br>
+              • Review logs for detailed error information
+            </div>
+          </td>
+        </tr>
+        """
+        return html
+
+    def get_email_subject(self, listing_count: int, good_deal_count: int) -> str:
+        """Generate email subject line with status."""
+        if not self.errors and listing_count > 0:
+            if good_deal_count > 0:
+                return f"🚗 Daily Car Deal Digest: {listing_count} listings, {good_deal_count} great deals"
+            else:
+                return f"🚗 Daily Car Deal Digest: {listing_count} listings"
+        elif self.errors and listing_count > 0:
+            return f"🚗 Daily Car Deal Digest: {listing_count} listings (⚠️ some sources failed)"
+        elif not self.errors and listing_count == 0:
+            return "🚗 Daily Car Deal Digest: No new listings today"
+        else:
+            return "🚗 Daily Car Deal Digest: ⚠️ Scraping failed"
+
+    def save_last_run(self):
+        """Save timestamp of successful run."""
+        self.last_run_file.parent.mkdir(exist_ok=True)
+        with open(self.last_run_file, "w") as f:
+            f.write(datetime.now().isoformat())
+        log.info("Saved last successful run timestamp")
+
+    def load_last_run(self):
+        """Load timestamp of last successful run."""
+        try:
+            if self.last_run_file.exists():
+                with open(self.last_run_file) as f:
+                    self.last_successful_run = datetime.fromisoformat(f.read().strip())
+                log.info(f"Last successful run: {self.last_successful_run}")
+        except Exception as e:
+            log.warning(f"Could not load last run timestamp: {e}")
+            self.last_successful_run = None
+
 
 
 def load_seen() -> set:
@@ -1248,8 +1357,8 @@ def build_email_html(results_by_region: dict) -> str:
     <tr>
       <td colspan="8" style="background:linear-gradient(135deg,#1e3a8a 0%,#3b4fd8 100%);
                              padding:20px 24px;border-bottom:2px solid #60a5fa;">
-        <div style="display:flex;align-items:center;justify-content:space-between;">
-          <div style="flex:1;">
+        <div class="top-pick-container" style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="top-pick-content" style="flex:1;">
             <div style="font-size:14px;color:#93c5fd;font-weight:600;
                        letter-spacing:0.05em;margin-bottom:8px;">
               🔥 TOP PICK TODAY
@@ -1261,7 +1370,7 @@ def build_email_html(results_by_region: dict) -> str:
             <div style="font-size:13px;color:#cbd5e1;margin-bottom:12px;">
               {top_pick['source']} · {top_pick.get('region', '')} [{region_tag}]
             </div>
-            <div style="display:flex;gap:35px;flex-wrap:wrap;">
+            <div class="top-pick-metrics" style="display:flex;gap:35px;flex-wrap:wrap;">
               <div style="margin-bottom:12px;min-width:100px;">
                 <div style="font-size:11px;color:#cbd5e1;text-transform:uppercase;
                            letter-spacing:0.05em;">Price</div>
@@ -1299,7 +1408,7 @@ def build_email_html(results_by_region: dict) -> str:
               </div>
             </div>
           </div>
-          <div style="margin-left:20px;">
+          <div class="top-pick-cta" style="margin-left:20px;">
             <a href="{top_pick['url']}" 
                style="display:inline-block;background:#4ade80;color:#0f172a;
                       padding:14px 28px;border-radius:8px;text-decoration:none;
@@ -1464,6 +1573,39 @@ def build_email_html(results_by_region: dict) -> str:
     /* Hide desktop table, show mobile cards */
     .desktop-table {{ display: none !important; }}
     .mobile-cards {{ display: block !important; }}
+    
+    /* Top Pick mobile optimization */
+    .top-pick-container {{
+      display: block !important;
+    }}
+    
+    .top-pick-content {{
+      margin-bottom: 16px !important;
+    }}
+    
+    .top-pick-metrics {{
+      display: grid !important;
+      grid-template-columns: 1fr 1fr !important;
+      gap: 12px !important;
+    }}
+    
+    .top-pick-cta {{
+      margin-left: 0 !important;
+      width: 100% !important;
+    }}
+    
+    .top-pick-cta a {{
+      display: block !important;
+      width: 100% !important;
+      text-align: center !important;
+      box-sizing: border-box !important;
+    }}
+    
+    /* Red Flag section mobile optimization */
+    .red-flag-warning {{
+      font-size: 12px !important;
+      line-height: 1.6 !important;
+    }}
     
     /* Mobile card styles */
     .mobile-card {{

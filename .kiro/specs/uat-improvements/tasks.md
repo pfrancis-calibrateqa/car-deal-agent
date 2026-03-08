@@ -165,22 +165,22 @@ This task list breaks down the four P0 improvements into actionable implementati
 **Estimated Time:** 2 hours
 
 #### Subtasks:
-- [ ] 5.1 Optimize Top Pick for mobile
+- [x] 5.1 Optimize Top Pick for mobile
   - Make metrics stack vertically on mobile
   - Ensure CTA button is full width
   - Test readability on small screens
 
-- [ ] 5.2 Optimize Red Flag section for mobile
+- [x] 5.2 Optimize Red Flag section for mobile
   - Apply card layout to red-flagged listings
   - Maintain red gradient background
   - Ensure warning text wraps properly
 
-- [ ] 5.3 Add mobile-specific typography
+- [x] 5.3 Add mobile-specific typography
   - Increase font sizes for readability
   - Adjust line heights (1.5-1.6)
   - Ensure no text requires zooming
 
-- [ ] 5.4 Optimize touch targets
+- [x] 5.4 Optimize touch targets
   - Ensure CTA buttons are min 44px height
   - Add adequate padding around tappable elements
   - Test on actual mobile devices
@@ -240,11 +240,11 @@ This task list breaks down the four P0 improvements into actionable implementati
 **Estimated Time:** 2 hours
 
 #### Subtasks:
-- [ ] 7.1 Create `ScrapingError` dataclass
+- [x] 7.1 Create `ScrapingError` dataclass
   - Add fields: source, error_type, message, timestamp
   - Import dataclass and datetime
 
-- [ ] 7.2 Create `ErrorHandler` class
+- [x] 7.2 Create `ErrorHandler` class
   - Add `__init__` with errors list and last_successful_run
   - Add `record_error()` method
   - Add `has_errors()` method
@@ -252,12 +252,12 @@ This task list breaks down the four P0 improvements into actionable implementati
   - Add `get_email_subject()` method
   - Add `save_last_run()` and `load_last_run()` methods
 
-- [ ] 7.3 Create last run persistence file
+- [x] 7.3 Create last run persistence file
   - Create data/last_successful_run.txt
   - Add to .gitignore
   - Implement file read/write logic
 
-- [ ] 7.4 Write unit tests
+- [x] 7.4 Write unit tests
   - Create `test_error_handler.py`
   - Test error recording
   - Test error section HTML generation
