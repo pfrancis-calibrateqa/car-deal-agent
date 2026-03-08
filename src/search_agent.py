@@ -1315,7 +1315,7 @@ def _deal_cell(listing: dict) -> tuple[str, str]:
     return cell_html, pct   # sort key = pct_below_market
 
 
-def build_email_html(results_by_region: dict) -> str:
+def build_email_html(results_by_region: dict, error_handler: ErrorHandler = None) -> str:
     today = datetime.now().strftime("%B %d, %Y")
     
     # Find the best deal across all regions (highest % below market with good grade)
@@ -1489,6 +1489,32 @@ def build_email_html(results_by_region: dict) -> str:
         </tr>"""
     
     rows_html = ""
+    
+    # Add troubleshooting tips if no listings found
+    no_listings_found = all(len(listings) == 0 for listings in results_by_region.values())
+    troubleshooting_html = ""
+    
+    if no_listings_found:
+        troubleshooting_html = """
+        <tr>
+          <td colspan="8" style="background:#1a1a2e;padding:20px 24px;border-top:2px solid #3b4fd8;">
+            <div style="font-size:14px;color:#fbbf24;font-weight:600;margin-bottom:12px;">
+              💡 No New Listings Found
+            </div>
+            <div style="font-size:13px;color:#cbd5e1;line-height:1.6;">
+              This could mean:<br>
+              • All current listings have already been sent to you<br>
+              • No new listings match your search criteria today<br>
+              • Listings may have been filtered out (salvage titles, manual transmission, etc.)<br>
+              <br>
+              <strong style="color:#f1f5f9;">What you can do:</strong><br>
+              • Check back tomorrow for new listings<br>
+              • Review your search criteria in <code style="background:#0f172a;padding:2px 6px;border-radius:3px;">config/search_criteria.json</code><br>
+              • Expand your search years or mileage limits<br>
+              • Consider additional makes/models
+            </div>
+          </td>
+        </tr>"""
 
     for region_name, listings in results_by_region.items():
         rows_html += f"""
@@ -1697,6 +1723,8 @@ def build_email_html(results_by_region: dict) -> str:
 
     {top_pick_html}
 
+    {error_handler.build_error_section() if error_handler else ""}
+
     {red_flag_html}
 
     <tr>
@@ -1711,18 +1739,30 @@ def build_email_html(results_by_region: dict) -> str:
       {col_html}
     </tr>
 
+    {troubleshooting_html}
+
     {rows_html}
 
     <tr>
       <td colspan="8"
           style="background:#080f1a;padding:14px 24px;
                  color:#94a3b8;font-size:12px;border-top:1px solid #0f172a;line-height:1.6;">
-        Score: year 40% · mileage 40% · price 20%
-        &nbsp;|&nbsp; Green ≥65 · Yellow ≥40 · Red &lt;40
-        &nbsp;|&nbsp; Deal vs Market: MarketCheck national avg (mileage-adjusted)
-        &nbsp;|&nbsp; [SF] = Bay Area listing · [MED] = Medford listing
-        &nbsp;·&nbsp; SF prices typically run higher than national avg
-        &nbsp;|&nbsp; New listings only · Powered by Playwright
+        <div style="margin-bottom:12px;">
+          Score: year 40% · mileage 40% · price 20%
+          &nbsp;|&nbsp; Green ≥65 · Yellow ≥40 · Red &lt;40
+          &nbsp;|&nbsp; Deal vs Market: MarketCheck national avg (mileage-adjusted)
+          &nbsp;|&nbsp; [SF] = Bay Area listing · [MED] = Medford listing
+          &nbsp;·&nbsp; SF prices typically run higher than national avg
+          &nbsp;|&nbsp; New listings only · Powered by Playwright
+        </div>
+        <div style="padding-top:12px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">
+          📊 Status: 
+          {f"Last successful run: {error_handler.last_successful_run.strftime('%b %d, %Y at %I:%M %p')}" if error_handler and error_handler.last_successful_run else "First run"}
+          &nbsp;·&nbsp; 
+          Script version: 2.0
+          &nbsp;·&nbsp;
+          Generated: {datetime.now().strftime('%b %d, %Y at %I:%M %p')}
+        </div>
       </td>
     </tr>
 
@@ -1882,8 +1922,9 @@ def send_email(subject: str, html: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def run(quiet: bool = False):
-    # Initialize progress manager
+    # Initialize progress manager and error handler
     progress_mgr = ProgressManager(enabled=not quiet)
+    error_handler = ErrorHandler()
     progress_mgr.start()
     
     config   = load_config()
@@ -1914,23 +1955,35 @@ async def run(quiet: bool = False):
 
                     raw: list[dict] = []
                     
-                    # Scrape Craigslist with progress
-                    with progress_mgr.task(f"🔍 Scraping Craigslist for {make} {model}...") as task:
-                        cl_listings = await search_craigslist(context, make, model, years, region, config)
-                        raw += cl_listings
-                        progress_mgr.update_task(task, f"✓ Craigslist: {len(cl_listings)} listings")
+                    # Scrape Craigslist with progress and error handling
+                    try:
+                        with progress_mgr.task(f"🔍 Scraping Craigslist for {make} {model}...") as task:
+                            cl_listings = await search_craigslist(context, make, model, years, region, config)
+                            raw += cl_listings
+                            progress_mgr.update_task(task, f"✓ Craigslist: {len(cl_listings)} listings")
+                    except Exception as e:
+                        error_handler.record_error("Craigslist", e)
+                        log.error(f"Craigslist scraping failed, continuing with other sources...")
                     
-                    # Scrape AutoTrader with progress
-                    with progress_mgr.task(f"🔍 Scraping AutoTrader for {make} {model}...") as task:
-                        at_listings = await search_autotrader(context, make, model, years, region)
-                        raw += at_listings
-                        progress_mgr.update_task(task, f"✓ AutoTrader: {len(at_listings)} listings")
+                    # Scrape AutoTrader with progress and error handling
+                    try:
+                        with progress_mgr.task(f"🔍 Scraping AutoTrader for {make} {model}...") as task:
+                            at_listings = await search_autotrader(context, make, model, years, region)
+                            raw += at_listings
+                            progress_mgr.update_task(task, f"✓ AutoTrader: {len(at_listings)} listings")
+                    except Exception as e:
+                        error_handler.record_error("AutoTrader", e)
+                        log.error(f"AutoTrader scraping failed, continuing with other sources...")
                     
-                    # Scrape Cars.com with progress
-                    with progress_mgr.task(f"🔍 Scraping Cars.com for {make} {model}...") as task:
-                        cc_listings = await search_cars_dot_com(context, make, model, years, region)
-                        raw += cc_listings
-                        progress_mgr.update_task(task, f"✓ Cars.com: {len(cc_listings)} listings")
+                    # Scrape Cars.com with progress and error handling
+                    try:
+                        with progress_mgr.task(f"🔍 Scraping Cars.com for {make} {model}...") as task:
+                            cc_listings = await search_cars_dot_com(context, make, model, years, region)
+                            raw += cc_listings
+                            progress_mgr.update_task(task, f"✓ Cars.com: {len(cc_listings)} listings")
+                    except Exception as e:
+                        error_handler.record_error("Cars.com", e)
+                        log.error(f"Cars.com scraping failed, continuing with other sources...")
                     
                     # Update total listings found
                     progress_mgr.stats["listings_found"] += len(raw)
@@ -1996,11 +2049,28 @@ async def run(quiet: bool = False):
     # Update progress stats
     progress_mgr.stats["api_calls"] = api_stats['live_api_calls']
 
-    total   = sum(len(v) for v in results_by_region.values())
-    subject = f"🚗 Car Deal Digest — {total} new listings · {date.today().strftime('%b %d')}"
-    html    = build_email_html(results_by_region)
+    total = sum(len(v) for v in results_by_region.values())
+    
+    # Count good deals for subject line
+    good_deal_count = sum(
+        1 for listings in results_by_region.values()
+        for l in listings
+        if l.get("deal_pct") and l.get("deal_pct") >= 15
+    )
+    
+    # Generate subject line using ErrorHandler
+    subject = error_handler.get_email_subject(total, good_deal_count)
+    
+    # Always build and send email (even if no listings or errors occurred)
+    html = build_email_html(results_by_region, error_handler)
     send_email(subject, html)
-    log.info(f"\nDone. {total} new listings delivered.")
+    
+    # Save last successful run only if no errors occurred
+    if not error_handler.has_errors():
+        error_handler.save_last_run()
+        log.info(f"\nDone. {total} new listings delivered.")
+    else:
+        log.warning(f"\nDone with errors. {total} new listings delivered, but some sources failed.")
     
     # Stop progress and print summary
     progress_mgr.stop()

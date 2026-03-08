@@ -4,6 +4,7 @@ An automated car listing aggregator that searches Craigslist, AutoTrader, and Ca
 
 ## Features
 
+### Core Functionality
 - **Multi-source scraping**: Searches Craigslist, AutoTrader, and Cars.com simultaneously
 - **Smart filtering**: Filters by year, mileage, color, keywords, and seller type
 - **Value scoring**: Ranks listings by a composite score (year 40%, mileage 40%, price 20%)
@@ -11,8 +12,17 @@ An automated car listing aggregator that searches Craigslist, AutoTrader, and Ca
 - **Mileage-adjusted pricing**: Fair market value is adjusted up/down based on how the listing's mileage compares to the market average
 - **Regional flagging**: Listings are tagged [SF] or [MED] so you can contextualize pricing — Bay Area listings typically run above national averages
 - **Duplicate detection**: Tracks seen listings to avoid repeat notifications
-- **Email digest**: Sends a styled HTML email with top results per region
 - **Stealth browsing**: Uses Playwright with anti-bot detection measures
+
+### User Experience (v2.0)
+- **Real-time progress display**: Animated spinners and status updates during execution
+- **Mobile-responsive email**: Card-based layout optimized for mobile devices (<600px)
+- **Error handling**: Always sends email even if some sources fail, with error reporting
+- **Status footer**: Shows last successful run, script version, and troubleshooting tips
+- **Always-send policy**: Never miss notifications due to scraping failures
+
+### Command-Line Options
+- `--quiet` - Disable progress display for automated/cron jobs
 
 ## How It Works
 

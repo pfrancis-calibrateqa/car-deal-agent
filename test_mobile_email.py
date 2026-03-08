@@ -91,8 +91,8 @@ test_results = {
     "Medford, OR": []
 }
 
-# Generate HTML
-html = build_email_html(test_results)
+# Generate HTML (error_handler is optional, so we can pass None)
+html = build_email_html(test_results, error_handler=None)
 
 # Write to file
 with open("email_mobile_preview.html", "w") as f:

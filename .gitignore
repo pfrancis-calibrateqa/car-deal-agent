@@ -14,4 +14,5 @@ build/
 email_preview.html
 email_mobile_preview.html
 test_email_output.html
+test_footer_*.html
 data/last_successful_run.txt

@@ -276,28 +276,28 @@ This task list breaks down the four P0 improvements into actionable implementati
 **Estimated Time:** 2 hours
 
 #### Subtasks:
-- [ ] 8.1 Add try-catch to Craigslist scraping
+- [x] 8.1 Add try-catch to Craigslist scraping
   - Wrap scrape_craigslist() in try-except
   - Call error_handler.record_error() on exception
   - Log error but continue execution
   - Don't let exception stop script
 
-- [ ] 8.2 Add try-catch to AutoTrader scraping
+- [x] 8.2 Add try-catch to AutoTrader scraping
   - Wrap scrape_autotrader() in try-except
   - Call error_handler.record_error() on exception
   - Log error but continue execution
 
-- [ ] 8.3 Add try-catch to Cars.com scraping
+- [x] 8.3 Add try-catch to Cars.com scraping
   - Wrap scrape_cars_com() in try-except
   - Call error_handler.record_error() on exception
   - Log error but continue execution
 
-- [ ] 8.4 Modify email generation
+- [x] 8.4 Modify email generation
   - Always call build_email_html() even if no listings
   - Include error_handler.build_error_section() in HTML
   - Use error_handler.get_email_subject() for subject line
 
-- [ ] 8.5 Implement always-send logic
+- [x] 8.5 Implement always-send logic
   - Remove conditional email sending
   - Always call send_email() at end of main()
   - Handle case of 0 listings gracefully
@@ -316,18 +316,18 @@ This task list breaks down the four P0 improvements into actionable implementati
 **Estimated Time:** 1 hour
 
 #### Subtasks:
-- [ ] 9.1 Add footer status section
+- [x] 9.1 Add footer status section
   - Create footer HTML template
   - Include last successful run timestamp
   - Include cache age indicator
   - Include script version
 
-- [ ] 9.2 Add troubleshooting tips
+- [x] 9.2 Add troubleshooting tips
   - Add "No listings found" guidance
   - Add error troubleshooting steps
   - Add links to documentation
 
-- [ ] 9.3 Test footer display
+- [x] 9.3 Test footer display
   - Verify footer appears in all email scenarios
   - Test with errors
   - Test with no listings

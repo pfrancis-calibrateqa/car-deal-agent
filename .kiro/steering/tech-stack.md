@@ -28,7 +28,14 @@ This application is a Python-based web scraping tool that automatically searches
 ### Email Delivery
 - **smtplib** - Python's built-in SMTP client
 - **Gmail SMTP** - Uses Gmail's SMTP server with app passwords
-- **HTML emails** - Custom-styled responsive email templates
+- **HTML emails** - Responsive email templates with mobile optimization
+- **rich 13.7.0** - Terminal progress display with spinners
+
+### Market Data
+- **MarketCheck API** - Vehicle market value data
+- **Regional pricing** - ZIP code + radius based pricing
+- **Cache system** - JSON cache with live API fallback
+- **Deal scoring** - Percentage below/above market calculations
 
 ### Configuration & Data
 - **JSON** - Configuration files (`search_criteria.json`, `seen_listings.json`)
@@ -36,6 +43,33 @@ This application is a Python-based web scraping tool that automatically searches
 - **python-dotenv** - Loads environment variables from `.env`
 
 ## Architecture
+
+### Core Components (v2.0)
+
+**ProgressManager** - Real-time execution feedback
+- Uses `rich` library for terminal UI
+- Spinner animations and status updates
+- Final summary with statistics
+- `--quiet` flag for automated runs
+
+**ErrorHandler** - Resilient error handling
+- Records errors without stopping execution
+- Always-send email policy (even on failure)
+- Error section in email with troubleshooting
+- Last successful run timestamp tracking
+- Status-aware email subject lines
+
+**Mobile-Responsive Email** - Card-based mobile layout
+- Dual layout: desktop table + mobile cards
+- CSS media queries (600px breakpoint)
+- Touch-friendly buttons (44px minimum)
+- Optimized typography for readability
+
+**DealScorer** - Market value comparison
+- MarketCheck API integration
+- Regional pricing support (SF Bay Area, Medford)
+- Deal grades: Steal, Great Deal, Good Deal, Fair Price, Overpriced
+- Cache-based with live API fallback
 
 ### Scraping Strategy
 Each source uses a tiered extraction approach:
@@ -59,11 +93,38 @@ Config (JSON) → Playwright Browser → Multiple Sources (parallel)
     ↓
 Raw Listings → Filters (mileage, keywords, colors, years)
     ↓
-Scoring (year 40%, mileage 40%, price 20%)
+Deep Inspection (title status, transmission, trim extraction)
+    ↓
+Deal Scoring (MarketCheck API, regional pricing)
+    ↓
+Value Scoring (year 40%, mileage 40%, price 20%)
     ↓
 Deduplication (hash-based seen tracking)
     ↓
-HTML Email Generation → Gmail SMTP → User Inbox
+Email Generation (desktop table + mobile cards)
+    ↓
+Error Handling (always-send policy)
+    ↓
+Gmail SMTP → User Inbox
+```
+
+### Error Handling Flow
+```
+Try: Scrape Craigslist
+  ↓ Success → Add listings
+  ↓ Failure → Record error, continue
+
+Try: Scrape AutoTrader
+  ↓ Success → Add listings
+  ↓ Failure → Record error, continue
+
+Try: Scrape Cars.com
+  ↓ Success → Add listings
+  ↓ Failure → Record error, continue
+
+Always: Build email (with error section if needed)
+Always: Send email (even if all sources failed)
+If no errors: Save last successful run timestamp
 ```
 
 ## Key Design Patterns
@@ -100,11 +161,20 @@ Higher scores indicate better deals (newer, lower mileage, lower price).
 ```
 car-deal-agent/
 ├── src/
-│   └── search_agent.py       # Main application
+│   ├── search_agent.py       # Main application with ProgressManager, ErrorHandler
+│   ├── deal_scorer.py        # MarketCheck API integration
+│   ├── car_value_lookup.py   # Market data lookup utilities
+│   ├── fetch_car_values.py   # Cache refresh script
+│   └── car_values_cache.json # Cached market data
 ├── config/
-│   └── search_criteria.json  # Search configuration
+│   └── search_criteria.json  # Search configuration with regions
 ├── data/
-│   └── seen_listings.json    # Deduplication tracking
+│   ├── seen_listings.json    # Deduplication tracking
+│   └── last_successful_run.txt # Last successful run timestamp
+├── .kiro/
+│   ├── specs/                # Feature specifications
+│   └── steering/             # Context documentation
+├── test_*.py                 # Unit tests
 ├── .env                      # Credentials (not in git)
 ├── requirements.txt          # Python dependencies
 └── venv/                     # Virtual environment
