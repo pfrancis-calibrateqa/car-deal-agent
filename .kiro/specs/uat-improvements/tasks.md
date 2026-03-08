@@ -147,7 +147,7 @@ This task list breaks down the four P0 improvements into actionable implementati
   - Style mobile-card, deal-badge, listing-title, price, metrics, source, cta-button
   - Ensure proper display toggling (desktop-table vs mobile-cards)
 
-- [-] 4.4 Modify `build_email_html()` function
+- [x] 4.4 Modify `build_email_html()` function
   - Add viewport meta tag
   - Include responsive CSS in <style> block
   - Generate both desktop table and mobile cards

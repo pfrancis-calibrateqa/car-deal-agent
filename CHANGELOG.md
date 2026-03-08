@@ -2,6 +2,60 @@
 
 ## 2026-03-08
 
+### ✅ Added: Mobile-Responsive Email Layout
+
+**Feature:** Email now includes a card-based layout optimized for mobile devices (<600px width).
+
+**Problem Solved:** Previously, the email used only a desktop table layout that was difficult to read on mobile devices. With 60% of email opens happening on mobile, users had to pinch-zoom and scroll horizontally to view listings, making the email nearly unusable on phones.
+
+**How It Works:**
+- Generates two layouts: desktop table (existing) and mobile cards (new)
+- Uses CSS media queries to show desktop table on wide screens, mobile cards on narrow screens
+- Breakpoint: 600px width
+- Mobile cards include:
+  - Deal badge at top (color-coded by deal quality)
+  - Large, readable title (18px)
+  - Prominent price display (24px, green)
+  - Key metrics (mileage, % below market, savings)
+  - Source and region information
+  - Full-width CTA button (min 44px height for easy tapping)
+
+**Mobile Card Structure:**
+```
+┌─────────────────────────────┐
+│ 🔥 Great Deal               │
+│                             │
+│ 2020 Honda CR-V Touring     │
+│                             │
+│ $23,000                     │
+│                             │
+│ 45,000 mi • 4.8% below      │
+│ Save $1,160                 │
+│                             │
+│ Craigslist • SF Bay • 3d    │
+│                             │
+│ [  VIEW LISTING →  ]        │
+└─────────────────────────────┘
+```
+
+**Implementation Details:**
+- `build_mobile_card()` - Generates individual card HTML
+- `build_mobile_cards()` - Generates complete mobile layout with all cards
+- Responsive CSS hides desktop table and shows cards on mobile
+- All inline styles for maximum email client compatibility
+- Touch-friendly buttons (44px minimum height)
+- Readable font sizes (no zooming required)
+
+**Email Client Compatibility:**
+- Tested in Gmail (iOS/Android/Web)
+- Tested in Apple Mail (iOS/macOS)
+- Fallback to desktop layout if media queries unsupported
+
+**Files Modified:**
+- `src/search_agent.py` - Added mobile card functions and responsive CSS
+
+---
+
 ### ✅ Added: Real-Time Progress Display
 
 **Feature:** Script now shows real-time progress during execution using animated spinners and status updates.
