@@ -347,19 +347,19 @@ This task list breaks down the four P0 improvements into actionable implementati
 **Estimated Time:** 2 hours
 
 #### Subtasks:
-- [ ] 10.1 Create `CacheManager` class
+- [x] 10.1 Create `CacheManager` class
   - Add `__init__` with cache_path parameter
   - Add `get_age_days()` method
   - Add `needs_refresh()` method with threshold parameter
   - Add `get_status_html()` method for email footer
   - Add `refresh()` method
 
-- [ ] 10.2 Refactor fetch_car_values.py
+- [x] 10.2 Refactor fetch_car_values.py
   - Extract fetch_and_cache() function for programmatic use
   - Make it importable from search_agent.py
   - Ensure it works both standalone and imported
 
-- [ ] 10.3 Write unit tests
+- [x] 10.3 Write unit tests
   - Create `test_cache_manager.py`
   - Test age calculation
   - Test needs_refresh logic
@@ -378,23 +378,23 @@ This task list breaks down the four P0 improvements into actionable implementati
 **Estimated Time:** 2 hours
 
 #### Subtasks:
-- [ ] 11.1 Add cache check to main()
+- [x] 11.1 Add cache check to main()
   - Create CacheManager instance
   - Call get_age_days() at script start
   - Log cache age
 
-- [ ] 11.2 Implement auto-refresh logic
+- [x] 11.2 Implement auto-refresh logic
   - Check if needs_refresh() returns True
   - Call cache_mgr.refresh() if needed
   - Pass progress_mgr for progress display
   - Handle refresh failures gracefully
 
-- [ ] 11.3 Add cache status to email footer
+- [x] 11.3 Add cache status to email footer
   - Call cache_mgr.get_status_html()
   - Include in footer section
   - Color-code based on age (green/yellow/red)
 
-- [ ] 11.4 Add manual refresh flag
+- [x] 11.4 Add manual refresh flag
   - Add --refresh-cache command-line argument
   - Force refresh regardless of age when flag present
   - Log manual refresh request

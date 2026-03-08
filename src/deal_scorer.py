@@ -122,8 +122,8 @@ class DealResult:
             f"{self.grade}\n"
             f"  {self.year} {self.make} {self.model} {self.trim or ''}\n"
             f"  Asking:  ${self.asking_price:,.0f}\n"
-            f"  Market:  ${self.market_avg:,.0f} avg  "
-            f"(${self.market_min:,.0f}–${self.market_max:,.0f})\n"
+            f"  Market median: ${self.market_median:,.0f}  "
+            f"(range: ${self.market_min:,.0f}–${self.market_max:,.0f})\n"
             f"  Adjusted market (mileage): ${self.adjusted_market:,.0f}\n"
             f"  You {'save' if self.savings_vs_avg < 0 else 'overpay'}: "
             f"${savings:,.0f} ({abs(self.pct_below_market):.1f}% {direction} market)\n"
@@ -383,8 +383,9 @@ class DealScorer:
                 return None
 
         # 3. Mileage adjustment
+        # Use median instead of mean for more robust pricing (resistant to outliers)
         mil_adj      = _mileage_adjustment(listing.mileage, market.get("mileage_avg"))
-        adj_market   = market["price_avg"] + mil_adj
+        adj_market   = market["price_median"] + mil_adj
 
         # 4. Score
         savings      = listing.asking_price - adj_market          # negative = good
@@ -409,7 +410,7 @@ class DealScorer:
             market_min         = market["price_min"],
             market_max         = market["price_max"],
             market_median      = market["price_median"],
-            adjusted_market    = round(adj_market, 2),
+            adjusted_market    = round(adj_market, 2),  # Based on median + mileage adjustment
             mileage            = listing.mileage,
             market_avg_mileage = market.get("mileage_avg"),
             mileage_adjustment = mil_adj,

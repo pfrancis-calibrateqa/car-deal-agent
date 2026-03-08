@@ -2,6 +2,129 @@
 
 ## 2026-03-08
 
+### ✅ Added: Automatic Cache Management
+
+**Feature:** Market data cache now auto-refreshes when it's more than 7 days old, ensuring deal scores are always based on current market conditions.
+
+**Problem Solved:** Previously, the cache could become stale indefinitely, leading to inaccurate deal scores based on outdated market data. Users had to manually run `fetch_car_values.py` to refresh, which was easy to forget.
+
+**How It Works:**
+- On script startup, checks cache age from `metadata.fetched_at` timestamp
+- If cache is >7 days old, automatically triggers refresh
+- Refresh runs `fetch_car_values.py` via subprocess
+- Progress displayed during refresh (with spinner)
+- If refresh fails, script continues with stale cache (doesn't block execution)
+- Cache status displayed in email footer with color coding:
+  - Green: <7 days old (fresh)
+  - Yellow: 7-30 days old (aging)
+  - Red: >30 days old (critically outdated)
+
+**Manual Refresh:**
+```bash
+python src/search_agent.py --refresh-cache
+```
+Forces cache refresh regardless of age.
+
+**Implementation Details:**
+- `CacheManager` class handles all cache operations
+- `get_age_days()` - Calculates cache age from ISO timestamp
+- `needs_refresh(threshold_days=7)` - Checks if refresh needed
+- `refresh(progress_mgr)` - Executes refresh with progress display
+- `get_status_html()` - Generates color-coded status for email
+- Integrated into `run()` function at startup
+- Cache status added to email footer
+
+**Why This Matters:**
+- Always accurate deal scores
+- No manual intervention required
+- Transparent cache status in every email
+- Graceful degradation if refresh fails
+- Respects API quota (max 4 refreshes/month at 7-day intervals)
+
+---
+
+### ✅ Added: "How We Rate Deals" Transparency Section
+
+**Feature:** Added an expandable "How We Rate Deals" section in the email header that explains our methodology and builds user confidence. Available in both desktop and mobile views.
+
+**Problem Solved:** Users may wonder how deal scores are calculated and whether they can trust the ratings. Without transparency, users might be skeptical of "great deal" claims or not understand why a listing is flagged as overpriced.
+
+**How It Works:**
+- Collapsible section with info icon (ℹ) in email header
+- Click/tap to expand full explanation
+- Shows total market data points analyzed (e.g., "50,000+ active listings")
+- Explains median vs mean pricing
+- Highlights regional accuracy
+- Describes mileage adjustment methodology
+- Lists all deal grade thresholds
+- Links to MarketCheck API as data source
+- **Responsive**: Appears in both desktop table and mobile card layouts
+
+**Content Highlights:**
+```
+✓ Median pricing (resistant to outliers)
+✓ Regional accuracy (your specific market)
+✓ Mileage-adjusted fair values
+✓ Fresh data (auto-refreshed every 7 days)
+✓ 50,000+ active listings analyzed
+```
+
+**Why This Matters:**
+- Builds trust through transparency
+- Educates users on methodology
+- Differentiates from competitors who use opaque scoring
+- Reduces support questions about deal ratings
+- Increases confidence in "great deal" recommendations
+
+**Implementation:**
+- Uses HTML `<details>` element for native expand/collapse
+- Calculates total market listings from cache dynamically
+- Shows regions covered (SF Bay Area, Medford, OR)
+- Styled to match email theme
+- Mobile-friendly (works in collapsible format on both views)
+- Touch-optimized for mobile (tap to expand)
+
+---
+
+### ✅ Improved: Deal Scoring Now Uses Median Instead of Mean
+
+**Feature:** Deal scoring now uses market median price instead of mean (average) for more accurate deal detection.
+
+**Problem Solved:** Previously, deal scores were calculated against the mean (average) market price, which is vulnerable to outliers. A single overpriced listing at $50k could skew the average up by thousands of dollars, making normal-priced cars appear to be "great deals" when they're actually just market rate. The median is mathematically robust against outliers and represents the true "middle" price that most buyers pay.
+
+**How It Works:**
+- Changed baseline from `price_avg` to `price_median` in deal_scorer.py
+- Mileage adjustments still applied to median baseline
+- All deal grades (Steal, Great Deal, Good Deal, etc.) now calculated against median
+- More accurate representation of actual market conditions
+
+**Example Impact:**
+```
+Before (using mean):
+Market avg: $24,500 (skewed by outliers)
+Listing: $23,000
+Result: "Great Deal" (6.1% below market)
+
+After (using median):
+Market median: $23,800 (true middle price)
+Listing: $23,000
+Result: "Fair Price" (3.4% below market)
+```
+
+**Technical Details:**
+- One-line change in `deal_scorer.py`: `market["price_median"]` instead of `market["price_avg"]`
+- MarketCheck API already provides median in stats response
+- No additional API calls required
+- Backward compatible with existing cache data
+
+**Why This Matters:**
+- Median is the industry standard for pricing analysis
+- Resistant to fake prices, typos, and dealer manipulation
+- More accurate deal detection = better purchasing decisions
+- Aligns with how professional car pricing services work (KBB, Edmunds, etc.)
+
+---
+
 ### ✅ Added: Mobile-Responsive Email Layout
 
 **Feature:** Email now includes a card-based layout optimized for mobile devices (<600px width).

@@ -150,6 +150,105 @@ class ProgressManager:
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
         return json.load(f)
+# ── Cache Management ──────────────────────────────────────────────────────────
+
+class CacheManager:
+    """Manages market data cache freshness and auto-refresh."""
+
+    def __init__(self, cache_path: Path):
+        self.cache_path = cache_path
+        self.age_days: Optional[int] = None
+        self.fetched_at: Optional[datetime] = None
+
+    def get_age_days(self) -> int:
+        """Get cache age in days."""
+        if not self.cache_path.exists():
+            log.warning(f"Cache file not found: {self.cache_path}")
+            return 999  # Force refresh
+
+        try:
+            with open(self.cache_path) as f:
+                data = json.load(f)
+
+            fetched_at_str = data.get("metadata", {}).get("fetched_at")
+            if not fetched_at_str:
+                log.warning("Cache missing fetched_at timestamp")
+                return 999
+
+            # Parse ISO format datetime
+            self.fetched_at = datetime.fromisoformat(fetched_at_str)
+
+            # Calculate age in days
+            now = datetime.now(self.fetched_at.tzinfo) if self.fetched_at.tzinfo else datetime.now()
+            age = (now - self.fetched_at).days
+            self.age_days = age
+
+            return age
+        except Exception as e:
+            log.error(f"Error reading cache age: {e}")
+            return 999
+
+    def needs_refresh(self, threshold_days: int = 7) -> bool:
+        """Check if cache needs refresh."""
+        age = self.get_age_days()
+        return age > threshold_days
+
+    def get_status_html(self) -> str:
+        """Get HTML status indicator for email footer."""
+        if self.age_days is None:
+            age = self.get_age_days()
+        else:
+            age = self.age_days
+
+        if age >= 999:
+            return '<span style="color:#ef4444;">🚨 Market data: Not found</span>'
+        elif age < 7:
+            return f'<span style="color:#4ade80;">✓ Market data: {age} days old</span>'
+        elif age < 30:
+            return f'<span style="color:#fbbf24;">⚠️ Market data: {age} days old</span>'
+        else:
+            return f'<span style="color:#ef4444;">🚨 Market data: {age} days old (critically outdated)</span>'
+
+    def refresh(self, progress_mgr: Optional['ProgressManager'] = None):
+        """Refresh cache by calling fetch_car_values script."""
+        try:
+            import subprocess
+
+            if progress_mgr:
+                with progress_mgr.task("🔄 Refreshing market data cache...") as task:
+                    result = subprocess.run(
+                        ["python", "src/fetch_car_values.py"],
+                        capture_output=True,
+                        text=True,
+                        timeout=300  # 5 minute timeout
+                    )
+
+                    if result.returncode == 0:
+                        progress_mgr.update_task(task, "✓ Market data cache refreshed")
+                        log.info("Cache refresh successful")
+                    else:
+                        progress_mgr.update_task(task, "✗ Cache refresh failed")
+                        log.error(f"Cache refresh failed: {result.stderr}")
+                        raise RuntimeError(f"Cache refresh failed: {result.stderr}")
+            else:
+                log.info("Refreshing market data cache...")
+                result = subprocess.run(
+                    ["python", "src/fetch_car_values.py"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+
+                if result.returncode == 0:
+                    log.info("✓ Cache refresh successful")
+                else:
+                    log.error(f"Cache refresh failed: {result.stderr}")
+                    raise RuntimeError(f"Cache refresh failed: {result.stderr}")
+
+        except Exception as e:
+            log.error(f"Failed to refresh cache: {e}")
+            raise
+
 # ── Error Handling ────────────────────────────────────────────────────────────
 
 @dataclass
@@ -1315,8 +1414,25 @@ def _deal_cell(listing: dict) -> tuple[str, str]:
     return cell_html, pct   # sort key = pct_below_market
 
 
-def build_email_html(results_by_region: dict, error_handler: ErrorHandler = None) -> str:
+def build_email_html(results_by_region: dict, error_handler: ErrorHandler = None, cache_mgr: CacheManager = None) -> str:
     today = datetime.now().strftime("%B %d, %Y")
+    
+    # Calculate total market data points for transparency
+    # Load cache to get total listings count across all vehicles
+    cache_path = Path(__file__).parent / "car_values_cache.json"
+    total_market_listings = 0
+    regions_covered = set()
+    
+    try:
+        with open(cache_path) as f:
+            cache_data = json.load(f)
+            for vehicle in cache_data.get("vehicles", []):
+                if vehicle.get("fetch_status") == "success":
+                    total_market_listings += vehicle.get("listings_count", 0)
+                    if vehicle.get("region"):
+                        regions_covered.add(vehicle.get("region"))
+    except Exception:
+        total_market_listings = 0  # Fallback if cache read fails
     
     # Find the best deal across all regions (highest % below market with good grade)
     all_listings = []
@@ -1721,6 +1837,56 @@ def build_email_html(results_by_region: dict, error_handler: ErrorHandler = None
       </td>
     </tr>
 
+    <tr>
+      <td colspan="8" style="background:#0f1729;padding:16px 24px;border-bottom:1px solid #1e293b;">
+        <details style="cursor:pointer;">
+          <summary style="list-style:none;display:flex;align-items:center;gap:8px;
+                         color:#60a5fa;font-size:13px;font-weight:600;cursor:pointer;
+                         user-select:none;">
+            <span style="display:inline-block;width:18px;height:18px;border-radius:50%;
+                        background:#1e3a8a;color:#93c5fd;text-align:center;line-height:18px;
+                        font-size:11px;font-weight:700;">ℹ</span>
+            <span>How We Rate Deals</span>
+            <span style="font-size:10px;color:#64748b;margin-left:4px;">▼ Click to expand</span>
+          </summary>
+          <div style="margin-top:16px;padding:16px;background:#0b1526;border-radius:8px;
+                     border-left:3px solid #3b4fd8;">
+            <div style="font-size:13px;color:#e2e8f0;line-height:1.7;margin-bottom:12px;">
+              <strong style="color:#60a5fa;">Our deal scores are powered by real market data.</strong>
+              We analyze <strong style="color:#4ade80;">{total_market_listings:,}+ active listings</strong> 
+              from the MarketCheck API to give you accurate, data-driven deal ratings.
+            </div>
+            <div style="font-size:12px;color:#cbd5e1;line-height:1.7;margin-bottom:10px;">
+              <strong style="color:#93c5fd;">Why you can trust our ratings:</strong>
+            </div>
+            <ul style="margin:0;padding-left:20px;font-size:12px;color:#cbd5e1;line-height:1.8;">
+              <li><strong>Median pricing</strong> — We use the statistical median (middle value), 
+                  not the average. This makes our ratings resistant to outliers, fake prices, 
+                  and dealer manipulation.</li>
+              <li><strong>Regional accuracy</strong> — Prices are calculated for your specific 
+                  market ({', '.join(sorted(regions_covered)) if regions_covered else 'your area'}), 
+                  not nationwide averages that don't reflect local conditions.</li>
+              <li><strong>Mileage-adjusted</strong> — We adjust the fair market value based on 
+                  each vehicle's mileage compared to the market average (~$50 per 1,000 miles).</li>
+              <li><strong>Fresh data</strong> — Market data is refreshed automatically when it's 
+                  more than 7 days old, ensuring you always see current pricing.</li>
+            </ul>
+            <div style="margin-top:14px;padding-top:12px;border-top:1px solid #1e293b;
+                       font-size:11px;color:#94a3b8;">
+              <strong style="color:#60a5fa;">Deal Grades:</strong>
+              🔥 Steal (20%+ below) · ✅ Great Deal (10-20% below) · 
+              👍 Good Deal (5-10% below) · ➡️ Fair Price (±5%) · 
+              ⚠️ Overpriced (5-10% above) · 🚫 Way Overpriced (10%+ above)
+            </div>
+            <div style="margin-top:8px;font-size:11px;color:#64748b;">
+              Data source: <a href="https://www.marketcheck.com" style="color:#60a5fa;text-decoration:none;">MarketCheck API</a>
+              · Updated: {datetime.now().strftime('%b %d, %Y')}
+            </div>
+          </div>
+        </details>
+      </td>
+    </tr>
+
     {top_pick_html}
 
     {error_handler.build_error_section() if error_handler else ""}
@@ -1762,6 +1928,8 @@ def build_email_html(results_by_region: dict, error_handler: ErrorHandler = None
           Script version: 2.0
           &nbsp;·&nbsp;
           Generated: {datetime.now().strftime('%b %d, %Y at %I:%M %p')}
+          <br>
+          {cache_mgr.get_status_html() if cache_mgr else ""}
         </div>
       </td>
     </tr>
@@ -1864,7 +2032,70 @@ def build_mobile_cards(results_by_region: dict, top_pick: dict = None, red_flagg
     Build mobile card layout for all listings.
     Returns HTML string with mobile-cards container and all cards.
     """
+    # Calculate total market data for mobile view
+    cache_path = Path(__file__).parent / "car_values_cache.json"
+    total_market_listings = 0
+    regions_covered = set()
+    
+    try:
+        with open(cache_path) as f:
+            cache_data = json.load(f)
+            for vehicle in cache_data.get("vehicles", []):
+                if vehicle.get("fetch_status") == "success":
+                    total_market_listings += vehicle.get("listings_count", 0)
+                    if vehicle.get("region"):
+                        regions_covered.add(vehicle.get("region"))
+    except Exception:
+        total_market_listings = 0
+    
     cards_html = '<div class="mobile-cards" style="display:none;padding:16px;">'
+    
+    # Add "How We Rate Deals" section for mobile
+    cards_html += f'''
+    <details style="margin-bottom:20px;background:#0f1729;border-radius:8px;padding:16px;border:1px solid #1e293b;">
+      <summary style="list-style:none;display:flex;align-items:center;gap:8px;
+                     color:#60a5fa;font-size:14px;font-weight:600;cursor:pointer;
+                     user-select:none;-webkit-tap-highlight-color:transparent;">
+        <span style="display:inline-block;width:20px;height:20px;border-radius:50%;
+                    background:#1e3a8a;color:#93c5fd;text-align:center;line-height:20px;
+                    font-size:12px;font-weight:700;">ℹ</span>
+        <span>How We Rate Deals</span>
+        <span style="font-size:11px;color:#64748b;margin-left:auto;">Tap to expand</span>
+      </summary>
+      <div style="margin-top:16px;padding:14px;background:#0b1526;border-radius:8px;
+                 border-left:3px solid #3b4fd8;">
+        <div style="font-size:14px;color:#e2e8f0;line-height:1.7;margin-bottom:12px;">
+          <strong style="color:#60a5fa;">Our deal scores are powered by real market data.</strong>
+          We analyze <strong style="color:#4ade80;">{total_market_listings:,}+ active listings</strong> 
+          to give you accurate, data-driven deal ratings.
+        </div>
+        <div style="font-size:13px;color:#cbd5e1;line-height:1.7;margin-bottom:10px;">
+          <strong style="color:#93c5fd;">Why you can trust our ratings:</strong>
+        </div>
+        <ul style="margin:0 0 12px 0;padding-left:20px;font-size:13px;color:#cbd5e1;line-height:1.8;">
+          <li style="margin-bottom:8px;"><strong>Median pricing</strong> — We use the statistical median, 
+              not the average. This makes our ratings resistant to outliers and fake prices.</li>
+          <li style="margin-bottom:8px;"><strong>Regional accuracy</strong> — Prices are calculated for 
+              {', '.join(sorted(regions_covered)) if regions_covered else 'your area'}, 
+              not nationwide averages.</li>
+          <li style="margin-bottom:8px;"><strong>Mileage-adjusted</strong> — We adjust fair market value 
+              based on each vehicle's mileage (~$50 per 1,000 miles).</li>
+          <li style="margin-bottom:8px;"><strong>Fresh data</strong> — Market data refreshes automatically 
+              when it's more than 7 days old.</li>
+        </ul>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #1e293b;
+                   font-size:12px;color:#94a3b8;line-height:1.6;">
+          <strong style="color:#60a5fa;">Deal Grades:</strong><br>
+          🔥 Steal (20%+ below) · ✅ Great (10-20%) · 👍 Good (5-10%) · 
+          ➡️ Fair (±5%) · ⚠️ Overpriced (5-10% above) · 🚫 Way Over (10%+ above)
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:#64748b;">
+          Data: <a href="https://www.marketcheck.com" style="color:#60a5fa;text-decoration:none;">MarketCheck API</a>
+          · Updated: {datetime.now().strftime('%b %d, %Y')}
+        </div>
+      </div>
+    </details>
+    '''
 
     # Add top pick card if exists
     if top_pick:
@@ -1921,11 +2152,38 @@ def send_email(subject: str, html: str):
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def run(quiet: bool = False):
+async def run(quiet: bool = False, refresh_cache: bool = False):
     # Initialize progress manager and error handler
     progress_mgr = ProgressManager(enabled=not quiet)
     error_handler = ErrorHandler()
     progress_mgr.start()
+    
+    # Initialize cache manager and check cache age
+    cache_path = Path(__file__).parent / "car_values_cache.json"
+    cache_mgr = CacheManager(cache_path)
+    
+    age = cache_mgr.get_age_days()
+    log.info(f"Market data cache: {age} days old")
+    
+    # Manual refresh if flag is set
+    if refresh_cache:
+        log.info("Manual cache refresh requested via --refresh-cache flag")
+        try:
+            cache_mgr.refresh(progress_mgr)
+            log.info("✓ Manual cache refresh successful")
+        except Exception as e:
+            log.error(f"Manual cache refresh failed: {e}")
+            log.warning("Continuing with existing cache...")
+    # Auto-refresh cache if needed (>7 days old)
+    elif cache_mgr.needs_refresh(threshold_days=7):
+        log.warning(f"Cache is {age} days old, refreshing...")
+        try:
+            cache_mgr.refresh(progress_mgr)
+            log.info("✓ Cache refresh successful")
+        except Exception as e:
+            log.error(f"Cache refresh failed: {e}")
+            log.warning("Continuing with stale cache...")
+            # Don't stop execution - continue with stale cache
     
     config   = load_config()
     seen     = load_seen()
@@ -2062,7 +2320,7 @@ async def run(quiet: bool = False):
     subject = error_handler.get_email_subject(total, good_deal_count)
     
     # Always build and send email (even if no listings or errors occurred)
-    html = build_email_html(results_by_region, error_handler)
+    html = build_email_html(results_by_region, error_handler, cache_mgr)
     send_email(subject, html)
     
     # Save last successful run only if no errors occurred
@@ -2081,10 +2339,11 @@ def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Car Deal Agent - Automated car listing aggregator")
     parser.add_argument('--quiet', action='store_true', help='Disable progress display')
+    parser.add_argument('--refresh-cache', action='store_true', help='Force refresh market data cache regardless of age')
     args = parser.parse_args()
 
     # Run with parsed arguments
-    asyncio.run(run(quiet=args.quiet))
+    asyncio.run(run(quiet=args.quiet, refresh_cache=args.refresh_cache))
 
 
 
