@@ -60,10 +60,17 @@ log = logging.getLogger(__name__)
 
 # ── Load vehicles from search_criteria.json ───────────────────────────────────
 
+# Common trim levels by make/model
+COMMON_TRIMS = {
+    "Honda CR-V": ["LX", "EX", "EX-L", "Touring", "Sport"],
+    "Mazda CX-5": ["Sport", "Touring", "Grand Touring", "Carbon", "Signature"],
+}
+
 def load_vehicles_from_config() -> list[dict]:
     """
     Reads config/search_criteria.json and generates a list of vehicles to fetch.
-    For each make/model, fetches data for all specified years.
+    For each make/model, fetches data for all specified years AND common trims.
+    Now also fetches region-specific pricing for each configured region.
     """
     if not CONFIG_FILE.exists():
         log.error(f"Config file not found: {CONFIG_FILE}")
@@ -73,30 +80,62 @@ def load_vehicles_from_config() -> list[dict]:
         config = json.load(f)
     
     vehicles = []
+    regions = config.get("regions", [])
+    
     for search in config.get("searches", []):
         make = search["make"]
         model = search["model"]
         years = search["years"]
         
-        # Fetch market data for each year
+        # Get common trims for this make/model
+        model_key = f"{make} {model}"
+        trims = COMMON_TRIMS.get(model_key, [])
+        
+        # Fetch market data for each year, trim, and region combination
         for year in years:
-            vehicles.append({
-                "year": year,
-                "make": make,
-                "model": model,
-                "trim": None  # We'll fetch aggregate data across all trims
-            })
+            # For each region, fetch regional pricing
+            for region in regions:
+                region_name = region["name"]
+                zip_code = region["center_zip"]
+                radius = region["radius_miles"]
+                
+                # Generic data (all trims averaged) for this region
+                vehicles.append({
+                    "year": year,
+                    "make": make,
+                    "model": model,
+                    "trim": None,
+                    "region": region_name,
+                    "zip_code": zip_code,
+                    "radius": radius
+                })
+                
+                # Trim-specific data for this region
+                for trim in trims:
+                    vehicles.append({
+                        "year": year,
+                        "make": make,
+                        "model": model,
+                        "trim": trim,
+                        "region": region_name,
+                        "zip_code": zip_code,
+                        "radius": radius
+                    })
     
     log.info(f"Loaded {len(vehicles)} vehicle configurations from {CONFIG_FILE}")
+    log.info(f"  (includes {len(regions)} regions × generic + trim-specific data)")
     return vehicles
 
 
 # ── API Helpers ───────────────────────────────────────────────────────────────
 
-def get_market_stats(year: int, make: str, model: str, trim: str = None) -> dict | None:
+def get_market_stats(year: int, make: str, model: str, trim: str = None,
+                     zip_code: str = None, radius: int = 100) -> dict | None:
     """
     Calls MarketCheck's inventory search with stats=true to get aggregated
     pricing (avg, min, max price and mileage) for a specific used vehicle.
+    
+    Now supports regional pricing via zip_code and radius parameters.
 
     Endpoint: GET /v2/search/car/active
     Docs: https://docs.marketcheck.com/docs/api/cars/inventory/active-inventory-search
@@ -112,6 +151,9 @@ def get_market_stats(year: int, make: str, model: str, trim: str = None) -> dict
     }
     if trim:
         params["trim"] = trim
+    if zip_code:
+        params["zip"] = zip_code
+        params["radius"] = radius
 
     try:
         resp = requests.get(
@@ -129,16 +171,17 @@ def get_market_stats(year: int, make: str, model: str, trim: str = None) -> dict
         count = data.get("totalListings", data.get("num_found", 0))
 
         if not price_stats or count == 0:
-            log.warning(f"  No listings found for {year} {make} {model} {trim or ''}")
+            region_label = f" (ZIP {zip_code}, {radius}mi)" if zip_code else ""
+            log.warning(f"  No listings found for {year} {make} {model} {trim or ''}{region_label}")
             return None
 
         return {
             "listings_count":   count,
-            "price_avg":        round(price_stats.get("mean", 0)),
-            "price_min":        round(price_stats.get("min", 0)),
-            "price_max":        round(price_stats.get("max", 0)),
-            "price_median":     round(price_stats.get("median", 0)),
-            "mileage_avg":      round(miles_stats.get("mean", 0)),
+            "price_avg":        round(price_stats.get("mean") or 0),
+            "price_min":        round(price_stats.get("min") or 0),
+            "price_max":        round(price_stats.get("max") or 0),
+            "price_median":     round(price_stats.get("median") or 0),
+            "mileage_avg":      round(miles_stats.get("mean") or 0),
         }
 
     except requests.exceptions.HTTPError as e:
@@ -186,17 +229,24 @@ def fetch_and_cache():
         make  = vehicle["make"]
         model = vehicle["model"]
         trim  = vehicle.get("trim")
+        region = vehicle.get("region")
+        zip_code = vehicle.get("zip_code")
+        radius = vehicle.get("radius", 100)
 
         label = f"{year} {make} {model} {trim or '(all trims)'}".strip()
-        log.info(f"  Fetching: {label}")
+        region_label = f" [{region}]" if region else ""
+        log.info(f"  Fetching: {label}{region_label}")
 
-        stats = get_market_stats(year, make, model, trim)
+        stats = get_market_stats(year, make, model, trim, zip_code, radius)
 
         record = {
             "year":  year,
             "make":  make,
             "model": model,
             "trim":  trim,
+            "region": region,
+            "zip_code": zip_code,
+            "radius": radius,
         }
 
         if stats:
@@ -225,7 +275,8 @@ def fetch_and_cache():
             "vehicles_requested": len(VEHICLES_TO_TRACK),
             "vehicles_with_data": success_count,
             "notes": (
-                "Prices are averages across active used-car listings nationwide. "
+                "Prices are averages across active used-car listings. "
+                "Regional pricing enabled: data fetched for each configured region with ZIP+radius. "
                 "MarketCheck free tier: 500 calls/month. Refresh this file daily or weekly. "
                 "Vehicle list automatically synced from search_criteria.json."
             ),

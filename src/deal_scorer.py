@@ -73,6 +73,8 @@ class ScrapedListing:
     source_url:   Optional[str]   = None
     source_site:  Optional[str]   = None   # "craigslist", "facebook", etc.
     listing_id:   Optional[str]   = None
+    region:       Optional[str]   = None   # "San Francisco Bay Area", "Medford, OR"
+    zip_code:     Optional[str]   = None   # ZIP code for regional pricing
 
 
 @dataclass
@@ -151,10 +153,11 @@ class CacheManager:
         with open(self.path, "w") as f:
             json.dump(self._data, f, indent=2)
 
-    def lookup(self, year: int, make: str, model: str, trim: Optional[str]) -> Optional[dict]:
+    def lookup(self, year: int, make: str, model: str, trim: Optional[str], region: Optional[str] = None) -> Optional[dict]:
         make_l  = make.lower()
         model_l = model.lower()
         trim_l  = trim.lower() if trim else None
+        region_l = region.lower() if region else None
 
         candidates = [
             v for v in self._data.get("vehicles", [])
@@ -163,6 +166,14 @@ class CacheManager:
             and v.get("model", "").lower() == model_l
             and v.get("fetch_status") == "success"
         ]
+        
+        # Filter by region if specified
+        if region_l:
+            regional = [c for c in candidates if (c.get("region") or "").lower() == region_l]
+            if regional:
+                candidates = regional
+            # If no regional data, fall back to national data (region=None in cache)
+        
         if not candidates:
             return None
 
@@ -180,7 +191,7 @@ class CacheManager:
     def store(self, record: dict):
         """Upsert a freshly fetched vehicle record into the cache."""
         vehicles = self._data.setdefault("vehicles", [])
-        # Remove any existing entry for this vehicle
+        # Remove any existing entry for this vehicle + region combination
         self._data["vehicles"] = [
             v for v in vehicles
             if not (
@@ -188,6 +199,7 @@ class CacheManager:
                 and v.get("make", "").lower()  == record["make"].lower()
                 and v.get("model", "").lower() == record["model"].lower()
                 and (v.get("trim") or "").lower() == (record.get("trim") or "").lower()
+                and (v.get("region") or "").lower() == (record.get("region") or "").lower()
             )
         ]
         self._data["vehicles"].append(record)
@@ -195,7 +207,8 @@ class CacheManager:
             datetime.now(timezone.utc).isoformat()
         )
         self._save()
-        log.info(f"  Cache updated: {record['year']} {record['make']} {record['model']}")
+        region_label = f" [{record.get('region')}]" if record.get('region') else ""
+        log.info(f"  Cache updated: {record['year']} {record['make']} {record['model']}{region_label}")
 
     @staticmethod
     def _age_hours(iso: str) -> float:
@@ -205,10 +218,15 @@ class CacheManager:
 
 # ── Live API Fetcher ──────────────────────────────────────────────────────────
 
-def fetch_live(year: int, make: str, model: str, trim: Optional[str]) -> Optional[dict]:
+def fetch_live(year: int, make: str, model: str, trim: Optional[str], 
+               zip_code: Optional[str] = None, radius: int = 100) -> Optional[dict]:
     """
     On cache miss: hit MarketCheck API directly.
     Result is stored back into the cache so future lookups are free.
+    
+    Args:
+        zip_code: ZIP code for regional pricing (e.g., "94102" for SF)
+        radius: Search radius in miles (default 100)
     """
     if not API_KEY:
         log.warning("No MARKETCHECK_API_KEY set — cannot do live lookup.")
@@ -225,9 +243,13 @@ def fetch_live(year: int, make: str, model: str, trim: Optional[str]) -> Optiona
     }
     if trim:
         params["trim"] = trim
+    if zip_code:
+        params["zip"] = zip_code
+        params["radius"] = radius
 
     label = f"{year} {make} {model} {trim or ''}".strip()
-    log.info(f"  Cache miss — live API call for: {label}")
+    region_label = f" (ZIP {zip_code}, {radius}mi)" if zip_code else " (national)"
+    log.info(f"  Cache miss — live API call for: {label}{region_label}")
 
     try:
         resp = requests.get(f"{BASE_URL}/search/car/active", params=params, timeout=10)
@@ -240,7 +262,7 @@ def fetch_live(year: int, make: str, model: str, trim: Optional[str]) -> Optiona
         count  = data.get("totalListings", data.get("num_found", 0))
 
         if not price or count == 0:
-            log.warning(f"  No market data found for {label}")
+            log.warning(f"  No market data found for {label}{region_label}")
             return None
 
         record = {
@@ -248,6 +270,8 @@ def fetch_live(year: int, make: str, model: str, trim: Optional[str]) -> Optiona
             "make":           make,
             "model":          model,
             "trim":           trim,
+            "zip_code":       zip_code,
+            "radius":         radius if zip_code else None,
             "listings_count": count,
             "price_avg":      round(price.get("mean", 0)),
             "price_min":      round(price.get("min", 0)),
@@ -330,10 +354,11 @@ class DealScorer:
     def score(self, listing: ScrapedListing) -> Optional[DealResult]:
         """
         Score a single scraped listing. Returns None if no market data is found.
+        Uses regional pricing if listing has region/zip_code set.
         """
-        # 1. Cache lookup (fast path)
+        # 1. Cache lookup (fast path) - try regional first, fall back to national
         market = self.cache.lookup(
-            listing.year, listing.make, listing.model, listing.trim
+            listing.year, listing.make, listing.model, listing.trim, listing.region
         )
         data_source = "cache"
 
@@ -341,9 +366,13 @@ class DealScorer:
         if market is None:
             self._misses += 1
             market = fetch_live(
-                listing.year, listing.make, listing.model, listing.trim
+                listing.year, listing.make, listing.model, listing.trim,
+                listing.zip_code, radius=100
             )
             if market:
+                # Add region to the record before caching
+                if listing.region:
+                    market["region"] = listing.region
                 self.cache.store(market)
                 data_source = "live_api"
             else:

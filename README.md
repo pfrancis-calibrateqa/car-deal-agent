@@ -152,6 +152,10 @@ Or via GitHub Actions — see `.github/workflows/daily_search.yml`.
 
 ```
 .
+├── .kiro/
+│   └── specs/
+│       ├── market-deal-scoring-integration/  # Deal scoring feature spec
+│       └── ux-improvements/                  # UX improvements spec
 ├── config/
 │   └── search_criteria.json           # Search configuration
 ├── data/
@@ -166,6 +170,7 @@ Or via GitHub Actions — see `.github/workflows/daily_search.yml`.
 ├── .github/
 │   └── workflows/
 │       └── daily_search.yml           # GitHub Actions schedule
+├── CHANGELOG.md                       # Recent changes and improvements
 ├── .env                               # Environment variables (create this)
 ├── requirements.txt
 └── README.md
