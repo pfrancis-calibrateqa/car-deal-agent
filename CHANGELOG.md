@@ -2,6 +2,44 @@
 
 ## 2026-03-08
 
+### ✅ Changed: Market Data Source to Private Party (FSBO) Pricing
+
+**Change:** Switched market data cache from dealer pricing to private party (FSBO) pricing for more accurate deal scoring.
+
+**Rationale:** 
+- Our scrapers filter for private party listings only (Craigslist, AutoTrader, Cars.com)
+- Comparing private party finds against dealer pricing was apples-to-oranges
+- Dealer prices are typically 10-20% higher than private party
+- FSBO-to-FSBO comparison provides more accurate deal assessment
+
+**What Changed:**
+- `fetch_car_values.py` now uses `/v2/search/car/fsbo/active` endpoint (was `/v2/search/car/active`)
+- Cache metadata now includes `"seller_type": "private_party"`
+- Cache notes updated to clarify "Prices from private party (FSBO) listings only - NOT dealer prices"
+- Documentation updated throughout
+
+**Impact:**
+- More accurate deal scores for private party listings
+- Better baseline for "good deal" vs "overpriced" ratings
+- No change to API call count (still 228 calls per refresh)
+- Existing cache will be replaced on next refresh
+
+**Before:**
+```
+Market median: $23,500 (dealer pricing)
+Your find: $21,000 (private party)
+Deal score: Good (comparing private to dealer)
+```
+
+**After:**
+```
+Market median: $21,800 (private party pricing)
+Your find: $21,000 (private party)
+Deal score: Fair (comparing private to private)
+```
+
+---
+
 ### ✅ Added: Automatic Cache Management
 
 **Feature:** Market data cache now auto-refreshes when it's more than 7 days old, ensuring deal scores are always based on current market conditions.

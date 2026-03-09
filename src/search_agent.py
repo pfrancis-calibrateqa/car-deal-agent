@@ -1466,8 +1466,9 @@ def build_email_html(results_by_region: dict, error_handler: ErrorHandler = None
         region_tag = REGION_TAGS.get(top_pick.get("region", ""), "")
         mileage_str = f"{top_pick['mileage']:,}" if top_pick.get("mileage") else "—"
         price_str = f"${top_pick['price']:,}" if top_pick.get("price") else "—"
-        savings = abs(top_pick.get("deal_vs_avg", 0))
-        pct = top_pick.get("deal_pct", 0)
+        deal_vs_avg = top_pick.get("deal_vs_avg")
+        savings = abs(deal_vs_avg) if deal_vs_avg is not None else 0
+        pct = top_pick.get("deal_pct") or 0
         
         top_pick_html = f"""
     <tr>
@@ -1869,7 +1870,7 @@ def build_email_html(results_by_region: dict, error_handler: ErrorHandler = None
               <li><strong>Mileage-adjusted</strong> — We adjust the fair market value based on 
                   each vehicle's mileage compared to the market average (~$50 per 1,000 miles).</li>
               <li><strong>Fresh data</strong> — Market data is refreshed automatically when it's 
-                  more than 7 days old, ensuring you always see current pricing.</li>
+                  more than 14 days old, ensuring you always see current pricing.</li>
             </ul>
             <div style="margin-top:14px;padding-top:12px;border-top:1px solid #1e293b;
                        font-size:11px;color:#94a3b8;">
@@ -1956,10 +1957,11 @@ def build_mobile_card(listing: dict) -> str:
     # Format mileage
     mileage_str = f"{listing['mileage']:,} mi" if listing.get('mileage') else "—"
 
-    # Deal information
-    deal_grade = listing.get('deal_grade', 'N/A')
-    deal_pct = listing.get('deal_pct', 0)
-    savings = abs(listing.get('deal_vs_avg', 0))
+    # Deal information - handle None values
+    deal_grade = listing.get('deal_grade') or 'N/A'
+    deal_pct = listing.get('deal_pct') or 0
+    deal_vs_avg = listing.get('deal_vs_avg')
+    savings = abs(deal_vs_avg) if deal_vs_avg is not None else 0
 
     # Format deal percentage
     if deal_pct > 0:
@@ -1973,8 +1975,8 @@ def build_mobile_card(listing: dict) -> str:
         deal_pct_color = "#fbbf24"  # yellow
 
     # Format savings
-    if listing.get('deal_vs_avg'):
-        if listing['deal_vs_avg'] < 0:
+    if deal_vs_avg is not None:
+        if deal_vs_avg < 0:
             savings_str = f"Save ${savings:,}"
             savings_color = "#4ade80"
         else:
@@ -2081,7 +2083,7 @@ def build_mobile_cards(results_by_region: dict, top_pick: dict = None, red_flagg
           <li style="margin-bottom:8px;"><strong>Mileage-adjusted</strong> — We adjust fair market value 
               based on each vehicle's mileage (~$50 per 1,000 miles).</li>
           <li style="margin-bottom:8px;"><strong>Fresh data</strong> — Market data refreshes automatically 
-              when it's more than 7 days old.</li>
+              when it's more than 14 days old.</li>
         </ul>
         <div style="margin-top:12px;padding-top:12px;border-top:1px solid #1e293b;
                    font-size:12px;color:#94a3b8;line-height:1.6;">
@@ -2174,8 +2176,8 @@ async def run(quiet: bool = False, refresh_cache: bool = False):
         except Exception as e:
             log.error(f"Manual cache refresh failed: {e}")
             log.warning("Continuing with existing cache...")
-    # Auto-refresh cache if needed (>7 days old)
-    elif cache_mgr.needs_refresh(threshold_days=7):
+    # Auto-refresh cache if needed (>14 days old)
+    elif cache_mgr.needs_refresh(threshold_days=14):
         log.warning(f"Cache is {age} days old, refreshing...")
         try:
             cache_mgr.refresh(progress_mgr)

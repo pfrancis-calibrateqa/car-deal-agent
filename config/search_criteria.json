@@ -3,13 +3,13 @@
     {
       "make": "Honda",
       "model": "CR-V",
-      "years": [2010, 2012, 2013, 2016, 2019, 2020, 2021, 2022, 2023, 2024],
+      "years": [2010, 2012, 2013, 2016, 2019, 2020, 2021, 2022],
       "drivetrain": "AWD"
     },
     {
       "make": "Mazda",
       "model": "CX-5",
-      "years": [2015, 2017, 2019, 2020, 2021, 2022, 2023, 2024, 2025],
+      "years": [2015, 2017, 2019, 2020, 2021, 2022],
       "drivetrain": "AWD"
     }
   ],
@@ -31,14 +31,14 @@
       "center_zip": "94102",
       "center_lat": 37.7749,
       "center_lng": -122.4194,
-      "radius_miles": 100
+      "radius_miles": 60
     },
     {
       "name": "Medford, OR",
       "center_zip": "97501",
       "center_lat": 42.3265,
       "center_lng": -122.8756,
-      "radius_miles": 60
+      "radius_miles": 50
     }
   ],
   "ranking": {
