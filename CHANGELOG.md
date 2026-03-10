@@ -2,53 +2,77 @@
 
 ## 2026-03-08
 
-### ✅ Changed: Market Data Source to Private Party (FSBO) Pricing
+### ✅ Added: Automatic Cache Backup and Restore
 
-**Change:** Switched market data cache from dealer pricing to private party (FSBO) pricing for more accurate deal scoring.
+**Feature:** Cache is now automatically backed up on every successful refresh, with automatic restore from backup if the main cache is corrupted or deleted.
 
-**Rationale:** 
-- Our scrapers filter for private party listings only (Craigslist, AutoTrader, Cars.com)
-- Comparing private party finds against dealer pricing was apples-to-oranges
-- Dealer prices are typically 10-20% higher than private party
-- FSBO-to-FSBO comparison provides more accurate deal assessment
+**How It Works:**
+- Every successful cache refresh creates a timestamped backup in `src/cache_backups/`
+- Backup filename format: `car_values_cache_YYYYMMDD_HHMMSS.json`
+- If main cache is missing or corrupted, automatically restores from most recent backup
+- Prevents API quota exhaustion from unnecessary re-fetches
+- Backups are excluded from git via `.gitignore`
 
-**What Changed:**
-- `fetch_car_values.py` now uses `/v2/search/car/fsbo/active` endpoint (was `/v2/search/car/active`)
-- Cache metadata now includes `"seller_type": "private_party"`
-- Cache notes updated to clarify "Prices from private party (FSBO) listings only - NOT dealer prices"
-- Documentation updated throughout
+**Benefits:**
+- Protection against accidental cache deletion
+- Recovery from corrupted cache files
+- Preserves API quota (no need to re-fetch if backup exists)
+- Historical record of cache states
 
-**Impact:**
-- More accurate deal scores for private party listings
-- Better baseline for "good deal" vs "overpriced" ratings
-- No change to API call count (still 228 calls per refresh)
-- Existing cache will be replaced on next refresh
-
-**Before:**
+**Example:**
 ```
-Market median: $23,500 (dealer pricing)
-Your find: $21,000 (private party)
-Deal score: Good (comparing private to dealer)
+src/
+  car_values_cache.json (main cache)
+  cache_backups/
+    car_values_cache_20260308_150000.json
+    car_values_cache_20260322_150000.json
+    car_values_cache_20260405_150000.json
 ```
 
-**After:**
+---
+
+### ✅ Decision: Using Dealer Pricing as Baseline (Reverted from FSBO)
+
+**Decision:** After testing FSBO (private party) pricing data, reverted to using dealer pricing as the market baseline.
+
+**Why the Change:**
+- FSBO API had very sparse data: only 8/168 vehicles (5%) had pricing data
+- Private party sellers don't list on centralized platforms that MarketCheck crawls
+- Dealer API provides much better coverage: ~67% of vehicles have data
+- Alternative APIs (KBB, Edmunds, NADA) either don't exist publicly or cost $200+/month
+
+**How This Works:**
+- Cache contains dealer asking prices (retail pricing)
+- Private party listings found via scraping are compared against dealer baseline
+- This provides a **conservative "retail ceiling"** for deal evaluation
+- If a private party listing beats dealer pricing, it's genuinely a good deal
+- Dealer prices are typically 10-20% higher than private party, so this built-in margin helps identify value
+
+**Example:**
 ```
-Market median: $21,800 (private party pricing)
-Your find: $21,000 (private party)
-Deal score: Fair (comparing private to private)
+Dealer median: $23,500 (from cache)
+Your find: $21,000 (private party on Craigslist)
+Deal score: Good ($2,500 below retail)
 ```
+
+**Trade-offs:**
+- ✅ Better data coverage (67% vs 5%)
+- ✅ Conservative baseline (less likely to overvalue deals)
+- ✅ No better alternatives available
+- ⚠️ Not apples-to-apples comparison (dealer vs private party)
+- ⚠️ May undervalue some deals (private party should be cheaper)
 
 ---
 
 ### ✅ Added: Automatic Cache Management
 
-**Feature:** Market data cache now auto-refreshes when it's more than 7 days old, ensuring deal scores are always based on current market conditions.
+**Feature:** Market data cache now auto-refreshes when it's more than 14 days old, ensuring deal scores are always based on current market conditions.
 
 **Problem Solved:** Previously, the cache could become stale indefinitely, leading to inaccurate deal scores based on outdated market data. Users had to manually run `fetch_car_values.py` to refresh, which was easy to forget.
 
 **How It Works:**
 - On script startup, checks cache age from `metadata.fetched_at` timestamp
-- If cache is >7 days old, automatically triggers refresh
+- If cache is >14 days old, automatically triggers refresh
 - Refresh runs `fetch_car_values.py` via subprocess
 - Progress displayed during refresh (with spinner)
 - If refresh fails, script continues with stale cache (doesn't block execution)
@@ -66,7 +90,7 @@ Forces cache refresh regardless of age.
 **Implementation Details:**
 - `CacheManager` class handles all cache operations
 - `get_age_days()` - Calculates cache age from ISO timestamp
-- `needs_refresh(threshold_days=7)` - Checks if refresh needed
+- `needs_refresh(threshold_days=14)` - Checks if refresh needed
 - `refresh(progress_mgr)` - Executes refresh with progress display
 - `get_status_html()` - Generates color-coded status for email
 - Integrated into `run()` function at startup
@@ -77,7 +101,7 @@ Forces cache refresh regardless of age.
 - No manual intervention required
 - Transparent cache status in every email
 - Graceful degradation if refresh fails
-- Respects API quota (max 4 refreshes/month at 7-day intervals)
+- Respects API quota (max 2 refreshes/month at 14-day intervals)
 
 ---
 

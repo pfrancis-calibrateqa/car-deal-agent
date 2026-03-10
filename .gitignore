@@ -17,3 +17,4 @@ email_how_we_rate_preview.html
 test_email_output.html
 test_footer_*.html
 data/last_successful_run.txt
+src/cache_backups/

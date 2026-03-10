@@ -1,10 +1,10 @@
 """
 used_car_values/fetch_car_values.py
 =====================================
-Fetches used car market values from private party (FSBO) listings via the 
-MarketCheck API and stores them in a local JSON cache file. Designed to be 
-run on a schedule (e.g., nightly cron job) so that the application always 
-reads from a fast local file rather than hitting the API on every request.
+Fetches used car market values from dealer listings via the MarketCheck API 
+and stores them in a local JSON cache file. Designed to be run on a schedule 
+(e.g., nightly cron job) so that the application always reads from a fast 
+local file rather than hitting the API on every request.
 
 DATA SOURCE
 -----------
@@ -12,7 +12,7 @@ MarketCheck API — https://www.marketcheck.com
   - Free tier: 500 calls/month, no credit card required
   - Sign up:   https://www.marketcheck.com/signup
   - Docs:      https://docs.marketcheck.com
-  - Endpoint:  /v2/search/car/fsbo/active (private party listings only)
+  - Endpoint:  /v2/search/car/active (dealer listings)
 
 SETUP
 -----
@@ -25,12 +25,13 @@ SETUP
 
 HOW IT WORKS
 ------------
-  fetch_car_values.py  ──(API calls)──►  MarketCheck FSBO API
+  fetch_car_values.py  ──(API calls)──►  MarketCheck Dealer API
          │
          ▼
   car_values_cache.json   ◄──  your app reads this file (fast, offline)
   
-NOTE: Cache contains private party pricing only, NOT dealer prices.
+NOTE: Cache contains dealer pricing. This provides a conservative baseline
+      for evaluating private party deals found via scraping.
 """
 
 import os
@@ -135,14 +136,13 @@ def load_vehicles_from_config() -> list[dict]:
 def get_market_stats(year: int, make: str, model: str, trim: str = None,
                      zip_code: str = None, radius: int = 100) -> dict | None:
     """
-    Calls MarketCheck's FSBO (private party) inventory search with stats=true 
-    to get aggregated pricing (avg, min, max price and mileage) for a specific 
-    used vehicle from private party sellers.
+    Calls MarketCheck's dealer inventory search with stats=true to get aggregated
+    pricing (avg, min, max price and mileage) for a specific used vehicle.
     
     Now supports regional pricing via zip_code and radius parameters.
 
-    Endpoint: GET /v2/search/car/fsbo/active
-    Docs: https://docs.marketcheck.com/docs/api/cars/inventory/fsbo-search
+    Endpoint: GET /v2/search/car/active
+    Docs: https://docs.marketcheck.com/docs/api/cars/inventory/active-inventory-search
     """
     params = {
         "api_key":  API_KEY,
@@ -161,7 +161,7 @@ def get_market_stats(year: int, make: str, model: str, trim: str = None,
 
     try:
         resp = requests.get(
-            f"{BASE_URL}/search/car/fsbo/active",
+            f"{BASE_URL}/search/car/active",
             params=params,
             timeout=10
         )
@@ -273,17 +273,18 @@ def fetch_and_cache():
     cache = {
         "metadata": {
             "source":       "MarketCheck API (https://www.marketcheck.com)",
-            "endpoint":     f"{BASE_URL}/search/car/fsbo/active",
-            "seller_type":  "private_party",
+            "endpoint":     f"{BASE_URL}/search/car/active",
+            "seller_type":  "dealer",
             "config_file":  str(CONFIG_FILE),
             "fetched_at":   datetime.now(timezone.utc).isoformat(),
             "vehicles_requested": len(VEHICLES_TO_TRACK),
             "vehicles_with_data": success_count,
             "notes": (
-                "Prices from private party (FSBO) listings only - NOT dealer prices. "
+                "Prices from dealer listings (not private party). "
                 "Regional pricing enabled: data fetched for each configured region with ZIP+radius. "
                 "MarketCheck free tier: 500 calls/month. Refresh this file daily or weekly. "
-                "Vehicle list automatically synced from search_criteria.json."
+                "Vehicle list automatically synced from search_criteria.json. "
+                "Dealer pricing provides a conservative baseline for evaluating private party deals."
             ),
         },
         "vehicles": results,
@@ -294,9 +295,19 @@ def fetch_and_cache():
     with open(CACHE_FILE, "w") as f:
         json.dump(cache, f, indent=2)
 
+    # Create timestamped backup
+    backup_dir = CACHE_FILE.parent / "cache_backups"
+    backup_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup_file = backup_dir / f"car_values_cache_{timestamp}.json"
+    with open(backup_file, "w") as f:
+        json.dump(cache, f, indent=2)
+
     log.info("=" * 60)
     log.info(f"Done. {success_count}/{len(VEHICLES_TO_TRACK)} vehicles fetched successfully.")
     log.info(f"Cache written to: {CACHE_FILE}")
+    log.info(f"Backup created: {backup_file}")
+    log.info("=" * 60)
     log.info("=" * 60)
 
 

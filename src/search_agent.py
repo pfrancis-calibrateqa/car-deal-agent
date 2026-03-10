@@ -157,6 +157,7 @@ class CacheManager:
 
     def __init__(self, cache_path: Path):
         self.cache_path = cache_path
+        self.backup_dir = cache_path.parent / "cache_backups"
         self.age_days: Optional[int] = None
         self.fetched_at: Optional[datetime] = None
 
@@ -164,6 +165,11 @@ class CacheManager:
         """Get cache age in days."""
         if not self.cache_path.exists():
             log.warning(f"Cache file not found: {self.cache_path}")
+            # Try to restore from most recent backup
+            if self._restore_from_backup():
+                log.info("Restored cache from backup")
+                # Recursively call to get age from restored cache
+                return self.get_age_days()
             return 999  # Force refresh
 
         try:
@@ -248,6 +254,41 @@ class CacheManager:
         except Exception as e:
             log.error(f"Failed to refresh cache: {e}")
             raise
+
+    def _restore_from_backup(self) -> bool:
+        """Restore cache from most recent backup if available."""
+        if not self.backup_dir.exists():
+            log.warning("No backup directory found")
+            return False
+
+        # Find all backup files
+        backups = sorted(self.backup_dir.glob("car_values_cache_*.json"), reverse=True)
+        
+        if not backups:
+            log.warning("No backup files found")
+            return False
+
+        # Try to restore from most recent backup
+        most_recent = backups[0]
+        try:
+            log.info(f"Attempting to restore from backup: {most_recent.name}")
+            with open(most_recent) as f:
+                data = json.load(f)
+            
+            # Verify backup is valid
+            if "metadata" in data and "vehicles" in data:
+                # Copy backup to main cache location
+                with open(self.cache_path, "w") as f:
+                    json.dump(data, f, indent=2)
+                log.info(f"Successfully restored cache from {most_recent.name}")
+                return True
+            else:
+                log.error("Backup file is invalid (missing metadata or vehicles)")
+                return False
+
+        except Exception as e:
+            log.error(f"Failed to restore from backup: {e}")
+            return False
 
 # ── Error Handling ────────────────────────────────────────────────────────────
 
