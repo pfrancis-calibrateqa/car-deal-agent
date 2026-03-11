@@ -2205,8 +2205,20 @@ async def run(quiet: bool = False, refresh_cache: bool = False):
     cache_path = Path(__file__).parent / "car_values_cache.json"
     cache_mgr = CacheManager(cache_path)
     
-    age = cache_mgr.get_age_days()
-    log.info(f"Market data cache: {age} days old")
+    # Check cache age with progress display
+    with progress_mgr.task("📊 Checking market data cache...") as task:
+        age = cache_mgr.get_age_days()
+        if age < 7:
+            status_emoji = "✓"
+            status_color = "fresh"
+        elif age < 30:
+            status_emoji = "⚠️"
+            status_color = "aging"
+        else:
+            status_emoji = "🚨"
+            status_color = "stale"
+        
+        progress_mgr.update_task(task, f"{status_emoji} Market data cache: {age} days old ({status_color})")
     
     # Manual refresh if flag is set
     if refresh_cache:
@@ -2289,8 +2301,9 @@ async def run(quiet: bool = False, refresh_cache: bool = False):
                     # Update total listings found
                     progress_mgr.stats["listings_found"] += len(raw)
 
-                    # Filter and score listings with progress
-                    with progress_mgr.task(f"💰 Filtering and scoring {len(raw)} listings...") as task:
+                    # Filter listings with progress
+                    with progress_mgr.task(f"🔍 Filtering {len(raw)} listings...") as task:
+                        filtered_listings = []
                         for listing in raw:
                             lid = listing_id(listing)
                             current_live_hashes.add(lid)  # Track all live listings
@@ -2304,27 +2317,35 @@ async def run(quiet: bool = False, refresh_cache: bool = False):
                             if not passes_filters(listing, config):
                                 continue
 
+                            filtered_listings.append(listing)
+                            new_listings_to_notify.add(lid)
+                        
+                        progress_mgr.update_task(task, f"✓ Filtered to {len(filtered_listings)} listings")
+                
+                # ── Deep inspection: check title status and extract trim BEFORE scoring ──
+                if filtered_listings:
+                    with progress_mgr.task(f"🔍 Deep inspecting {len(filtered_listings)} listings...") as task:
+                        inspected = await deep_inspect_listings(context, filtered_listings, concurrency=5)
+                        filtered_count = len(filtered_listings) - len(inspected)
+                        progress_mgr.update_task(task, f"✓ Deep inspection complete ({len(inspected)} clean, {filtered_count} filtered)")
+                        progress_mgr.stats["filtered_count"] += filtered_count
+                        filtered_listings = inspected
+                
+                # ── Score listings with trim data now available ──
+                if filtered_listings:
+                    with progress_mgr.task(f"💰 Scoring {len(filtered_listings)} listings...") as task:
+                        for listing in filtered_listings:
                             # ── Existing value score (unchanged) ──
                             listing["score"] = value_score(listing, config)
 
-                            # ── NEW: market deal score ──────────────
+                            # ── NEW: market deal score (now with trim data!) ──────────────
                             listing = apply_deal_score(listing, scorer)
 
                             region_listings.append(listing)
-                            new_listings_to_notify.add(lid)
                         
-                        progress_mgr.update_task(task, f"✓ Scored {len(region_listings)} new listings")
+                        progress_mgr.update_task(task, f"✓ Scored {len(region_listings)} listings")
 
                 region_listings.sort(key=lambda x: x["score"], reverse=True)
-                
-                # ── Deep inspection: check title status on listing pages ──
-                if region_listings:
-                    with progress_mgr.task(f"🔍 Deep inspecting {len(region_listings)} listings...") as task:
-                        inspected = await deep_inspect_listings(context, region_listings, concurrency=5)
-                        filtered_count = len(region_listings) - len(inspected)
-                        region_listings = inspected
-                        progress_mgr.update_task(task, f"✓ Deep inspection complete ({len(inspected)} clean, {filtered_count} filtered)")
-                        progress_mgr.stats["filtered_count"] += filtered_count
                 
                 results_by_region[region["name"]] = region_listings[:25]
                 log.info(f"\n✓ {region['name']}: {len(region_listings)} qualifying new listings")

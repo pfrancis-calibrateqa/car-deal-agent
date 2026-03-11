@@ -177,16 +177,81 @@ class CacheManager:
         if not candidates:
             return None
 
+        # Try exact trim match first
         if trim_l:
             exact = [c for c in candidates if (c.get("trim") or "").lower() == trim_l]
-            match = exact[0] if exact else candidates[0]   # fall back to any trim
+            if exact:
+                match = exact[0]
+            else:
+                # No exact match - calculate weighted average from all trim-specific data
+                match = self._calculate_trim_average(candidates)
         else:
-            match = candidates[0]
+            # No trim specified - calculate weighted average from all trim-specific data
+            match = self._calculate_trim_average(candidates)
 
         fetched_at = self._data.get("metadata", {}).get("fetched_at")
         result = dict(match)
         result["_cache_age_hours"] = self._age_hours(fetched_at) if fetched_at else None
         return result
+    
+    def _calculate_trim_average(self, candidates: list[dict]) -> dict:
+        """
+        Calculate weighted average from all trim-specific entries.
+        Uses listing counts as weights for more accurate market representation.
+        Falls back to generic (trim=None) entry if no trim-specific data available.
+        """
+        # Separate trim-specific entries from generic entry
+        trim_specific = [c for c in candidates if c.get("trim") is not None]
+        generic = [c for c in candidates if c.get("trim") is None]
+        
+        # If we have trim-specific data, calculate weighted average
+        if trim_specific:
+            total_listings = sum(c.get("listings_count", 0) for c in trim_specific)
+            
+            if total_listings > 0:
+                # Weighted average of each price metric
+                weighted_median = sum(
+                    c.get("price_median", 0) * c.get("listings_count", 0) 
+                    for c in trim_specific
+                ) / total_listings
+                
+                weighted_avg = sum(
+                    c.get("price_avg", 0) * c.get("listings_count", 0) 
+                    for c in trim_specific
+                ) / total_listings
+                
+                weighted_mileage = sum(
+                    c.get("mileage_avg", 0) * c.get("listings_count", 0) 
+                    for c in trim_specific
+                ) / total_listings
+                
+                # Find min/max across all trims
+                price_min = min(c.get("price_min", 0) for c in trim_specific)
+                price_max = max(c.get("price_max", 0) for c in trim_specific)
+                
+                # Create synthetic entry with averaged data
+                return {
+                    "year": trim_specific[0]["year"],
+                    "make": trim_specific[0]["make"],
+                    "model": trim_specific[0]["model"],
+                    "trim": None,  # Indicates this is a calculated average
+                    "region": trim_specific[0].get("region"),
+                    "listings_count": total_listings,
+                    "price_median": round(weighted_median),
+                    "price_avg": round(weighted_avg),
+                    "price_min": price_min,
+                    "price_max": price_max,
+                    "mileage_avg": round(weighted_mileage),
+                    "fetch_status": "success",
+                    "_calculated_from_trims": True  # Flag to indicate this is calculated
+                }
+        
+        # Fall back to generic entry if available
+        if generic:
+            return generic[0]
+        
+        # Last resort: return first candidate
+        return candidates[0] if candidates else None
 
     def store(self, record: dict):
         """Upsert a freshly fetched vehicle record into the cache."""

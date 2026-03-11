@@ -1,5 +1,92 @@
 # Car Deal Agent - Change Log
 
+## 2026-03-10
+
+### ✅ Fixed: Trim-Level Market Pricing
+
+**Problem:** All trim levels for the same vehicle showed identical market averages, even though cache contained trim-specific pricing data with variance. For example, 2021 Mazda CX-5 Touring, Grand Touring, and Carbon all showed $25,547 instead of their respective trim-specific prices.
+
+**Root Cause:** Deal scoring happened BEFORE deep inspection, so trim data wasn't extracted yet. Listings were scored with `trim=None`, causing all trims to fall back to generic pricing.
+
+**Solution:**
+1. **Reordered execution flow** in `search_agent.py`:
+   - Changed from: Scraping → Filtering → Scoring → Deep Inspection
+   - Changed to: Scraping → Filtering → Deep Inspection → Scoring
+   - Trim is now extracted BEFORE deal scoring happens
+
+2. **Implemented weighted trim averaging** in `deal_scorer.py`:
+   - Added `_calculate_trim_average()` method to CacheManager
+   - When no exact trim match found, calculates weighted average from all trim-specific cache entries
+   - Uses `listings_count` as weight for more accurate market representation
+   - Formula: `(price1 × count1 + price2 × count2) / (count1 + count2)`
+   - Falls back to generic entry if no trim-specific data available
+
+**Results:**
+- ✅ Touring trim now shows $28,026 (was $25,547)
+- ✅ Grand Touring shows $23,068 (was $25,547)
+- ✅ Unknown trims (e.g., "EX" on Mazda) use weighted average $25,547
+- ✅ Trims without data (e.g., "Carbon") use weighted average $25,547
+
+**Testing:**
+- ✅ `test_trim_lookup.py` - Confirms trim-specific prices retrieved correctly
+- ✅ `test_trim_average.py` - Confirms weighted averaging works
+- ✅ `test_trim_e2e.py` - End-to-end test with three example listings
+
+**Files Changed:**
+- `src/search_agent.py` (reordered execution: deep inspection before scoring)
+- `src/deal_scorer.py` (added weighted trim averaging)
+- `test_trim_lookup.py` (new test file)
+- `test_trim_average.py` (new test file)
+- `test_trim_e2e.py` (new test file)
+
+**User Benefits:**
+1. **Accurate pricing**: Each trim level shows its true market value
+2. **Better deal detection**: Correctly identifies steals vs overpriced listings
+3. **Transparent calculations**: Weighted averaging when exact match unavailable
+4. **Market distribution**: Uses listing counts as weights for realistic averages
+
+---
+
+### ✅ Enhanced: Cache Check Progress Display
+
+**Feature:** Cache age check now displays progress with visual status indicators (✓ fresh, ⚠️ aging, 🚨 stale).
+
+**Problem Solved:** Previously, cache age was only logged without visual feedback. Users couldn't quickly see cache status during script execution.
+
+**How It Works:**
+- Wraps cache age check in progress.task() context manager
+- Shows "📊 Checking market data cache..." while checking
+- Updates with status emoji and age:
+  - ✓ Fresh: <7 days old (green)
+  - ⚠️ Aging: 7-30 days old (yellow)
+  - 🚨 Stale: >30 days old (red)
+- Example: "✓ Market data cache: 2 days old (fresh)"
+
+**Implementation Details:**
+- Modified `run()` function in `src/search_agent.py`
+- Added progress task wrapper around `cache_mgr.get_age_days()`
+- Color-coded status indicators based on age thresholds
+- Consistent with email footer status colors
+
+**Testing:**
+- ✅ Fresh cache (2 days) displays correctly
+- ✅ Aging cache (10 days) displays correctly
+- ✅ Stale cache (35 days) displays correctly
+- ✅ Missing cache (999 days) displays correctly
+- ✅ All tests pass in `test_cache_check_progress.py`
+
+**Files Changed:**
+- `src/search_agent.py` (enhanced cache check with progress display)
+- `test_cache_check_progress.py` (new test file)
+
+**User Benefits:**
+1. **Immediate visibility**: See cache status at a glance
+2. **Visual indicators**: Emoji-based status (✓/⚠️/🚨) for quick recognition
+3. **Consistent UX**: Matches email footer status indicators
+4. **Better transparency**: Know cache freshness before scraping starts
+
+---
+
 ## 2026-03-08
 
 ### ✅ Added: Automatic Cache Backup and Restore

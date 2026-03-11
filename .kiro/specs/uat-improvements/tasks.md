@@ -44,7 +44,7 @@ This task list breaks down the four P0 improvements into actionable implementati
 **Estimated Time:** 3 hours
 
 #### Subtasks:
-- [ ] 2.1 Add progress to cache check
+- [x] 2.1 Add progress to cache check
   - Wrap cache age check in progress.task()
   - Show "Checking cache age..." message
   - Update to show cache age result
